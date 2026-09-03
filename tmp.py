@@ -1,7 +1,4 @@
-"""XAUUSD 2025 seasonality as the main chart (calendar-month).
-
-Mirrors 4-charts.py draw_year for a single year. Run all years with 4-charts.py.
-"""
+"""XAUUSD 2025: raw close + seasonality together (mirrors 4-charts.py)."""
 
 from pathlib import Path
 
@@ -11,37 +8,55 @@ import polars as pl
 
 matplotlib.rcParams["axes.grid"] = False
 
-SRC = Path("data/monthly_features.parquet")
+SRC = Path("data/xauusd_d1.parquet")
+FEAT = Path("data/monthly_features.parquet")
 OUT = Path("charts/yearly/xauusd_2025.png")
 YEAR = 2025
 
 
 def main() -> None:
-    yf = pl.read_parquet(SRC).filter(pl.col("year") == YEAR).sort("month")
-    if yf.height == 0:
-        raise SystemExit(f"no months for {YEAR} in {SRC}")
+    yd = pl.read_parquet(SRC).filter(
+        (~pl.col("is_filled")) & (pl.col("date").dt.year() == YEAR)
+    ).sort("time")
+    yf = pl.read_parquet(FEAT).filter(pl.col("year") == YEAR).sort("month")
+    if yd.height == 0:
+        raise SystemExit(f"no rows for {YEAR}")
+    dates = yd["date"].to_list()
+    closes = yd["close"].to_list()
     months = yf["month"].to_list()
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.bar(months, yf["s"].to_list(), width=0.7, alpha=0.85, label="S_m")
-    ax.plot(months, yf["q_trend"].to_list(), marker="o", linewidth=2, color="black", label="q_m")
-    ax.plot(months, yf["t_range"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_range")
-    ax.plot(months, yf["t_direction"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_dir")
-    ax.plot(months, yf["t_mono"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_mono")
+    fig, (ax_p, ax_s) = plt.subplots(2, 1, figsize=(14, 8),
+                                     gridspec_kw={"height_ratios": [3, 1]})
+    ax_p.plot(dates, closes, linewidth=1.2, label="close")
+    seen: dict = {}
+    for d in dates:
+        seen.setdefault(d.month, d)
+    for mm in sorted(seen):
+        ax_p.axvline(seen[mm], color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax_p.axvline(dates[-1], color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax_p.set_title(f"XAUUSD D1 {YEAR} (vertical = month start)")
+    ax_p.set_ylabel("close (USD)")
+    ax_p.legend()
+
+    ax_s.bar(months, yf["s"].to_list(), width=0.7, alpha=0.85, label="S_m")
+    ax_s.plot(months, yf["q_trend"].to_list(), marker="o", linewidth=2, color="black", label="q_m")
+    ax_s.plot(months, yf["t_range"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_range")
+    ax_s.plot(months, yf["t_direction"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_dir")
+    ax_s.plot(months, yf["t_mono"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_mono")
     for mm in months:
-        ax.axvline(mm - 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
-    ax.axvline(months[-1] + 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
-    ax.set_ylim(0, 1)
-    ax.set_xlim(months[0] - 0.5, 12.5)
-    ax.set_xticks(months)
-    ax.set_xlabel("month")
-    ax.set_ylabel("0=ranging 1=trend")
-    ax.set_title(f"XAUUSD {YEAR} seasonality (calendar-month)")
-    ax.legend(ncol=5)
+        ax_s.axvline(mm - 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax_s.axvline(months[-1] + 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax_s.set_ylim(0, 1)
+    ax_s.set_xlim(months[0] - 0.5, 12.5)
+    ax_s.set_xticks(months)
+    ax_s.set_xlabel("month")
+    ax_s.set_ylabel("0=ranging 1=trend")
+    ax_s.set_title("Monthly seasonality (calendar-month)")
+    ax_s.legend(ncol=5)
     fig.tight_layout()
     OUT.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(OUT, dpi=150)
-    print(f"months={yf.height} saved={OUT.resolve()}")
+    print(f"saved={OUT.resolve()}")
     plt.show()
 
 
