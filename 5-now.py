@@ -100,7 +100,8 @@ def main() -> None:
                 nowcasts[mo["ym"]] = (q_hat, float(mae))
                 print(
                     f"nowcast {mo['ym']} (k={len(mo['c'])}): "
-                    f"q_m~{q_hat:.3f} (+/-{mae:.3f}), S_m~{s_hat:.3f}"
+                    f"q_m~{q_hat:.3f} (+/-{mae:.3f}), S_m~{s_hat:.3f}, "
+                    f"raw interval [{q_hat - mae:+.3f},{q_hat + mae:+.3f}]"
                 )
     except FileNotFoundError, OSError:
         print("nowcast model unavailable (run 2-seasonality.py and 8-xgb.py first)")
@@ -126,10 +127,11 @@ def main() -> None:
     )
     for ym, (val, mae) in nowcasts.items():
         if ym == f"{py}-{pm:02d}":
+            lo, hi = min(mae, val), min(mae, 1.0 - val)  # keep whisker on-axis
             ax.errorbar(
                 [xs[-1]],
                 [val],
-                yerr=[[mae], [mae]],
+                yerr=[[lo], [hi]],
                 fmt="D",
                 color="orange",
                 ecolor="orange",
