@@ -13,11 +13,11 @@ import importlib.util
 import json
 from pathlib import Path
 
+import joblib
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
-import xgboost as xgb
 
 matplotlib.rcParams["axes.grid"] = False
 
@@ -29,8 +29,9 @@ _spec.loader.exec_module(xgb8)
 SRC = Path("data/xauusd_d1.parquet")
 FEAT = Path("data/monthly_features.parquet")
 TAB = Path("data/seasonality_by_month.csv")
-MODEL = Path("models/xauusd_partial.json")
+MODEL = Path("models/xgb_partial_multi.joblib")
 METRICS = Path("models/xgb_partial_metrics.json")
+GMM_ART = Path("models/gmm_regime.joblib")
 OUT = Path("charts/now.png")
 MIN_N = 15
 TRAIL = 12
@@ -76,26 +77,33 @@ def main() -> None:
 
     nowcasts: dict[str, tuple[float, float]] = {}
     try:
-        model = xgb.XGBRegressor()
-        model.load_model(MODEL)
+        model = joblib.load(MODEL)
+        art = joblib.load(GMM_ART)
+        gmm, tidx = art["gmm"], art["trend_idx"]
         metrics = json.loads(METRICS.read_text())
         real = pl.read_parquet(SRC).filter(~pl.col("is_filled")).sort("time")
         for mo in xgb8.month_rows(real):
             if mo["ym"] in {r["ym"] for r in pending}:
-                f = np.array(
-                    xgb8.build_partial_features(
-                        mo["h"], mo["low"], mo["c"], mo["c0"], len(mo["c"])
-                    )
-                ).reshape(1, -1)
+                t_hat = model.predict(
+                    np.array(
+                        xgb8.build_partial_features(
+                            mo["h"], mo["low"], mo["c"], mo["c0"], len(mo["c"])
+                        )
+                    ).reshape(1, -1)
+                )[0]
+                s_hat = xgb8.geomean_row(t_hat)
+                q_hat = float(
+                    gmm.predict_proba(np.clip(t_hat, 0, 1).reshape(1, -1))[0, tidx]
+                )
                 bkt = bucket_of(len(mo["c"]))
-                mae = metrics["mae_by_k_bucket"].get(bkt, metrics["test_mae"])
-                nowcasts[mo["ym"]] = (float(model.predict(f)[0]), float(mae))
+                mae = metrics["buckets"].get(bkt, {"mae_q": 0.15})["mae_q"]
+                nowcasts[mo["ym"]] = (q_hat, float(mae))
                 print(
                     f"nowcast {mo['ym']} (k={len(mo['c'])}): "
-                    f"S_m~{nowcasts[mo['ym']][0]:.3f} (+/-{mae:.3f} test MAE)"
+                    f"q_m~{q_hat:.3f} (+/-{mae:.3f}), S_m~{s_hat:.3f}"
                 )
     except FileNotFoundError, OSError:
-        print("nowcast model unavailable (run 8-xgb.py first)")
+        print("nowcast model unavailable (run 2-seasonality.py and 8-xgb.py first)")
 
     xs = list(range(len(trail) + 1))
     labels = [r["ym"] for r in trail] + [f"{py}-{pm:02d}*"]

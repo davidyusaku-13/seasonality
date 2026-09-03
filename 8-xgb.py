@@ -1,20 +1,25 @@
-"""Partial-month scorer: first-k-days data -> final full-month S_m.
+"""Partial-month scorer: first-k-days data -> final [T_range, T_dir, T_mono].
 
-Trains XGBoost on complete months (N>=15): for each month and each
-k in 3..min(20, N-1), features come strictly from the first k days plus
-the prior close C0 (known at month start), target is the final S_m.
-Time split (train years < 2021, test >= 2021), naive baseline = partial S.
-Saves models/xgb_partial.json and nowcasts any in-progress month.
+S_m derives by geometric mean and q_m via the saved GMM artifact, exactly
+as for scored months, so nowcasts live on the same scales. Trains one
+XGB regressor per component (MultiOutputRegressor) on complete months
+(N>=15): for each month and each k in 3..min(20, N-1), features come
+strictly from the first k days plus the prior close C0. Time split
+(train years < 2021, test >= 2021). Baselines: partial components/S_m
+as predictors, and the GMM posterior of the partial month for q.
 
-Outputs: models/xgb_partial.json
+Outputs: models/xgb_partial_multi.joblib, models/xgb_partial_metrics.json
 """
 
 import importlib.util
+import json
 from pathlib import Path
 
+import joblib
 import numpy as np
 import polars as pl
 import xgboost as xgb
+from sklearn.multioutput import MultiOutputRegressor
 
 SPEC = Path(__file__).with_name("2-seasonality.py")
 _spec = importlib.util.spec_from_file_location("seasonality2", SPEC)
@@ -23,10 +28,12 @@ _spec.loader.exec_module(s2)
 
 SRC = Path("data/xauusd_d1.parquet")
 FEAT = Path("data/monthly_features.parquet")
-MODEL_OUT = Path("models/xauusd_partial.json")
+GMM_ART = Path("models/gmm_regime.joblib")
+MODEL_OUT = Path("models/xgb_partial_multi.joblib")
 MIN_N = 15
 K_MIN, K_MAX = 3, 20
 SPLIT_YEAR = 2021
+TARGETS = ["t_range", "t_direction", "t_mono"]
 
 FEATURES = [
     "k",
@@ -64,6 +71,11 @@ def build_partial_features(
     ]
 
 
+def geomean_row(t: np.ndarray) -> float:
+    t = np.clip(t, 0, 1)
+    return 0.0 if t.min() <= 0 else float(np.prod(t) ** (1 / 3))
+
+
 def month_rows(real: pl.DataFrame) -> list[dict]:
     """Per-month OHLC arrays with prior close (real bars only)."""
     times = real["time"].to_list()
@@ -89,50 +101,29 @@ def month_rows(real: pl.DataFrame) -> list[dict]:
     return out
 
 
-def build_dataset(
-    months: list[dict], s_by_ym: dict
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list]:
-    X, y, ks, keys = [], [], [], []
-    for mo in months:
-        n = len(mo["c"])
-        if n < MIN_N or mo["ym"] not in s_by_ym:
-            continue
-        for k in range(K_MIN, min(K_MAX, n - 1) + 1):
-            X.append(build_partial_features(mo["h"], mo["low"], mo["c"], mo["c0"], k))
-            y.append(s_by_ym[mo["ym"]])
-            ks.append(k)
-            keys.append((mo["ym"], k))
-    return np.array(X), np.array(y), np.array(ks), keys
-
-
-def report(name: str, pred: np.ndarray, actual: np.ndarray) -> None:
-    err = np.abs(pred - actual)
-    ss_res = float(np.sum((actual - pred) ** 2))
-    ss_tot = float(np.sum((actual - actual.mean()) ** 2))
-    print(
-        f"{name}: MAE={err.mean():.4f} RMSE={np.sqrt((err**2).mean()):.4f} "
-        f"R2={1 - ss_res / ss_tot:.3f} within0.10={float(np.mean(err < 0.10)):.3f}"
-    )
-
-
 def main() -> None:
     real = pl.read_parquet(SRC).filter(~pl.col("is_filled")).sort("time")
-    s_by_ym = {r["ym"]: float(r["s"]) for r in pl.read_parquet(FEAT).to_dicts()}
+    feat = {r["ym"]: r for r in pl.read_parquet(FEAT).to_dicts()}
+    art = joblib.load(GMM_ART)
+    gmm_full, tidx_full = art["gmm"], art["trend_idx"]
     months = month_rows(real)
-    X, y, ks, _ = build_dataset(months, s_by_ym)
-    ym_of_row = []
+
+    Xs, Ys, ks, yms = [], [], [], []
     for mo in months:
         n = len(mo["c"])
-        if n < MIN_N or mo["ym"] not in s_by_ym:
+        if n < MIN_N or mo["ym"] not in feat:
             continue
-        for _k in range(K_MIN, min(K_MAX, n - 1) + 1):
-            ym_of_row.append(mo["ym"])
-    ym_of_row = np.array(ym_of_row)
-    tr = ym_of_row < f"{SPLIT_YEAR}-01"
-    te = ~tr
-    print(f"rows={len(y)} train={int(tr.sum())} test={int(te.sum())}")
+        for k in range(K_MIN, min(K_MAX, n - 1) + 1):
+            Xs.append(build_partial_features(mo["h"], mo["low"], mo["c"], mo["c0"], k))
+            fr = feat[mo["ym"]]
+            Ys.append([fr[t] for t in TARGETS])
+            ks.append(k)
+            yms.append(mo["ym"])
+    X, Y, ks, yms = (np.array(a) for a in (Xs, Ys, ks, yms))
+    tr = yms < f"{SPLIT_YEAR}-01"
+    print(f"rows={len(Y)} train={int(tr.sum())} test={int((~tr).sum())}")
 
-    model = xgb.XGBRegressor(
+    base = xgb.XGBRegressor(
         objective="reg:squarederror",
         n_estimators=500,
         max_depth=4,
@@ -143,54 +134,94 @@ def main() -> None:
         seed=0,
         n_jobs=1,
     )
-    model.fit(X[tr], y[tr])
-    pred = model.predict(X[te])
-    naive = X[te][:, FEATURES.index("pS")]
-    print("--- test (>= 2021) ---")
-    report("xgb  ", pred, y[te])
-    report("naive", naive, y[te])
+    model = MultiOutputRegressor(base)
+    model.fit(X[tr], Y[tr])
+    P = model.predict(X[te := ~tr])
+
+    # realized q from a train-window-only GMM (no lookahead in eval labels)
+    from sklearn.mixture import GaussianMixture
+
+    g = GaussianMixture(
+        n_components=2,
+        covariance_type="full",
+        n_init=10,
+        random_state=0,
+        reg_covar=1e-3,
+    )
+    Xtr_full = np.array(
+        [
+            [feat[r["ym"]][t] for t in TARGETS]
+            for r in pl.read_parquet(FEAT)
+            .filter((pl.col("year") < SPLIT_YEAR) & (pl.col("n") >= MIN_N))
+            .to_dicts()
+        ]
+    )
+    g.fit(Xtr_full)
+    tidx_tr = int(np.argsort(g.means_.mean(axis=1))[1])
+    q_real = g.predict_proba(Y[te])[:, tidx_tr]
+
+    s_hat = np.array([geomean_row(p) for p in P])
+    s_true = np.array([geomean_row(t) for t in Y[te]])
+    q_hat = gmm_full.predict_proba(np.clip(P, 0, 1))[:, tidx_full]
+    naive_s = X[te][:, FEATURES.index("pS")]
+    naive_q = gmm_full.predict_proba(np.clip(X[te][:, 1:4], 0, 1))[:, tidx_full]
+
+    print("--- per-component test MAE (xgb vs partial-as-predictor) ---")
+    for j, t in enumerate(TARGETS):
+        print(
+            f"{t:<12} xgb={np.abs(P[:, j] - Y[te][:, j]).mean():.4f} "
+            f"naive={np.abs(X[te][:, 1 + j] - Y[te][:, j]).mean():.4f}"
+        )
+    ex, en = np.abs(s_hat - s_true), np.abs(naive_s - s_true)
+    print(
+        f"S_m: MAE xgb={ex.mean():.4f} naive={en.mean():.4f} "
+        f"within0.10 xgb={float(np.mean(ex < 0.10)):.3f}"
+    )
+    brier = lambda a, b: float(np.mean((a - b) ** 2))
+    print(
+        f"q_m: Brier xgb={brier(q_hat, q_real):.4f} naive={brier(naive_q, q_real):.4f} "
+        f"agree xgb={float(np.mean((q_hat > 0.5) == (q_real > 0.5))):.3f} "
+        f"naive={float(np.mean((naive_q > 0.5) == (q_real > 0.5))):.3f}"
+    )
+    buckets: dict[str, dict[str, float]] = {}
     for lo, hi in ((3, 7), (8, 12), (13, 17), (18, 20)):
         m = (ks[te] >= lo) & (ks[te] <= hi)
-        err_x = np.abs(pred[m] - y[te][m]).mean()
-        err_n = np.abs(naive[m] - y[te][m]).mean()
+        buckets[f"{lo}-{hi}"] = {
+            "mae_s": float(np.abs(s_hat[m] - s_true[m]).mean()),
+            "mae_q": float(np.abs(q_hat[m] - q_real[m]).mean()),
+        }
         print(
-            f"k={lo:2d}..{hi:2d} n={int(m.sum()):4d} MAE xgb={err_x:.4f} naive={err_n:.4f}"
+            f"k={lo:2d}..{hi:2d} n={int(m.sum()):4d} "
+            f"MAE_S xgb={buckets[f'{lo}-{hi}']['mae_s']:.4f} "
+            f"MAE_q xgb={buckets[f'{lo}-{hi}']['mae_q']:.4f}"
         )
-    imp = sorted(zip(FEATURES, model.feature_importances_), key=lambda t: -t[1])
-    print("importance:", [(f, round(float(v), 3)) for f, v in imp])
 
     MODEL_OUT.parent.mkdir(parents=True, exist_ok=True)
-    model.save_model(MODEL_OUT)
+    joblib.dump(model, MODEL_OUT)
+    metrics = {
+        "mae_s": float(ex.mean()),
+        "brier_q": brier(q_hat, q_real),
+        "buckets": buckets,
+        "features": FEATURES,
+        "targets": TARGETS,
+    }
+    METRICS_OUT = MODEL_OUT.with_name("xgb_partial_metrics.json")
+    METRICS_OUT.write_text(json.dumps(metrics, indent=2))
     print(f"saved={MODEL_OUT.resolve()}")
-
-    import json
-
-    buckets: dict[str, float] = {}
-    for lo, hi in ((3, 7), (8, 12), (13, 17), (18, 20)):
-        m = (ks[te] >= lo) & (ks[te] <= hi)
-        buckets[f"{lo}-{hi}"] = float(np.abs(pred[m] - y[te][m]).mean())
-    metrics_path = MODEL_OUT.with_name("xgb_partial_metrics.json")
-    metrics_path.write_text(
-        json.dumps(
-            {
-                "test_mae": float(np.abs(pred - y[te]).mean()),
-                "mae_by_k_bucket": buckets,
-                "features": FEATURES,
-            },
-            indent=2,
-        )
-    )
-    print(f"saved={metrics_path.resolve()}")
+    print(f"saved={METRICS_OUT.resolve()}")
 
     for mo in months:
         n = len(mo["c"])
         if n >= MIN_N or n < K_MIN:
             continue
-        f = np.array(
-            build_partial_features(mo["h"], mo["low"], mo["c"], mo["c0"], n)
-        ).reshape(1, -1)
+        t_hat = model.predict(
+            np.array(
+                build_partial_features(mo["h"], mo["low"], mo["c"], mo["c0"], n)
+            ).reshape(1, -1)
+        )[0]
         print(
-            f"nowcast {mo['ym']} (k={n}): predicted final S_m={float(model.predict(f)[0]):.3f}"
+            f"nowcast {mo['ym']} (k={n}): S_m~{geomean_row(t_hat):.3f} "
+            f"q_m~{float(gmm_full.predict_proba(np.clip(t_hat, 0, 1).reshape(1, -1))[0, tidx_full]):.3f}"
         )
 
 

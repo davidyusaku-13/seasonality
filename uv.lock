@@ -497,6 +497,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "holidays" },
+    { name = "joblib" },
     { name = "matplotlib" },
     { name = "metatrader5" },
     { name = "polars" },
@@ -509,6 +510,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "holidays", specifier = ">=0.103" },
+    { name = "joblib", specifier = ">=1.6.0" },
     { name = "matplotlib", specifier = ">=3.11.1" },
     { name = "metatrader5", specifier = ">=5.0.6147" },
     { name = "polars", specifier = ">=1.44.1" },
