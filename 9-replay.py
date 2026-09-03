@@ -56,10 +56,19 @@ def main() -> None:
     assert all(t in by_ym for t in targets), "missing 2026 months"
 
     recs = []
+    stab = []
     for t in targets:
         hist = [m for m in months if m["ym"] < t]
         Xh = np.array([final_X(m) for m in hist])
         g, tidx, qh = fit_gmm(Xh)
+        stab.append(
+            {
+                "ym": t,
+                "means": g.means_.copy(),
+                "weights": g.weights_.copy(),
+                "tidx": tidx,
+            }
+        )
         qh_by_m: dict[int, list] = {}
         for m, q in zip([m["month"] for m in hist], qh):
             qh_by_m.setdefault(m, []).append(q)
@@ -93,6 +102,30 @@ def main() -> None:
     )
     print(
         f"hard agree proj={np.mean([(r['pred_q'] > 0.5) == (r['real_q'] > 0.5) for r in recs]):.3f}"
+    )
+
+    ref_g, ref_tidx, _ = fit_gmm(np.array([final_X(m) for m in months]))
+    ref_means = ref_g.means_
+    print("refit stability (drift = L2 of trend-mean vs full-data fit):")
+    worst, ok = 0.0, True
+    for s in stab:
+        D = np.array(
+            [
+                [np.linalg.norm(s["means"][i] - ref_means[j]) for j in (0, 1)]
+                for i in (0, 1)
+            ]
+        )
+        match_trend = int(np.argmin(D[:, ref_tidx]))  # step comp nearest ref-trend
+        drift = float(np.linalg.norm(s["means"][s["tidx"]] - ref_means[ref_tidx]))
+        worst = max(worst, drift)
+        same = match_trend == s["tidx"] and float(s["weights"].min()) > 0.2
+        ok &= same
+        print(
+            f"  {s['ym']}: tidx={s['tidx']} weights={np.round(s['weights'], 3).tolist()} "
+            f"drift={drift:.4f} label_match={match_trend == s['tidx']}"
+        )
+    print(
+        f"STABILITY: {'PASS' if ok and worst < 0.05 else 'FAIL'} (max_drift={worst:.4f})"
     )
 
 
