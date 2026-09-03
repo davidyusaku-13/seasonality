@@ -142,11 +142,12 @@ def fit_mixture(feat: pl.DataFrame) -> np.ndarray:
 
 
 def calendar_table(feat: pl.DataFrame) -> pl.DataFrame:
-    q = feat["q_trend"].to_numpy()
-    months = feat["month"].to_numpy()
+    full = feat.filter(pl.col("n") >= MIN_N_FIT)
+    qv = full["q_trend"].to_numpy()
+    months = full["month"].to_numpy()
     rows = []
     for m in range(1, 13):
-        qq = q[months == m]
+        qq = qv[months == m]
         n = len(qq)
         raw = float(qq.mean()) if n else float("nan")
         shrunk = float((0.5 + qq.sum()) / (n + 1)) if n else float("nan")
