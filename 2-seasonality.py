@@ -18,7 +18,6 @@ Mixture fit uses full months only (N>=15) so partial edge months
 
 from pathlib import Path
 
-import joblib
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,7 +30,6 @@ FEAT_OUT = Path("data/monthly_features.parquet")
 TAB_OUT = Path("data/seasonality_by_month.csv")
 FIG_SEASON = Path("seasonality.png")
 FIG_TIME = Path("monthly_scores.png")
-GMM_ART = Path("models/gmm_regime.joblib")
 MIN_N_FIT = 15
 
 MONTH_NAMES = [
@@ -77,12 +75,38 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
     t_mono = float(abs(tau)) if tau is not None and np.isfinite(tau) else 0.0
     t_mono = float(np.clip(t_mono, 0, 1))
 
-    s = (
-        float((t_range * t_dir * t_mono) ** (1 / 3))
-        if min(t_range, t_dir, t_mono) > 0
-        else 0.0
-    )
+    s = geomean_row(np.array([t_range, t_dir, t_mono]))
     return t_range, t_dir, t_mono, s
+
+
+def geomean_row(t: np.ndarray) -> float:
+    t = np.clip(t, 0, 1)
+    return 0.0 if t.min() <= 0 else float(np.prod(t) ** (1 / 3))
+
+
+def month_rows(real: pl.DataFrame) -> list[dict]:
+    """Per-month OHLC arrays with prior close (real bars only)."""
+    times = real["time"].to_list()
+    closes_all = [float(v) for v in real["close"].to_list()]
+    out = []
+    for y, m in sorted({(d.year, d.month) for d in real["date"].to_list()}):
+        mb = real.filter(
+            (pl.col("date").dt.year() == y) & (pl.col("date").dt.month() == m)
+        ).sort("time")
+        idx = times.index(mb["time"].min())
+        c0 = closes_all[idx - 1] if idx > 0 else float(mb["open"].to_list()[0])
+        out.append(
+            {
+                "year": y,
+                "month": m,
+                "ym": f"{y}-{m:02d}",
+                "h": np.array(mb["high"].to_list(), dtype=float),
+                "low": np.array(mb["low"].to_list(), dtype=float),
+                "c": np.array(mb["close"].to_list(), dtype=float),
+                "c0": float(c0),
+            }
+        )
+    return out
 
 
 def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
@@ -121,7 +145,7 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows).sort(["year", "month"])
 
 
-def fit_mixture(feat: pl.DataFrame) -> tuple[np.ndarray, GaussianMixture, int]:
+def fit_mixture(feat: pl.DataFrame) -> np.ndarray:
     X = feat.select(["t_range", "t_direction", "t_mono"]).to_numpy()
     fit_mask = (feat["n"] >= MIN_N_FIT).to_numpy()
     gmm = GaussianMixture(
@@ -140,7 +164,7 @@ def fit_mixture(feat: pl.DataFrame) -> tuple[np.ndarray, GaussianMixture, int]:
         f"trend_comp={trend_idx} means={gmm.means_.round(3).tolist()} "
         f"weights={gmm.weights_.round(3).tolist()}"
     )
-    return q, gmm, trend_idx
+    return q
 
 
 def calendar_table(feat: pl.DataFrame) -> pl.DataFrame:
@@ -180,11 +204,8 @@ def main() -> None:
 
     feat = build_monthly(real)
     print(f"months: {feat.height} ({feat['ym'].min()}..{feat['ym'].max()})")
-    q, gmm, trend_idx = fit_mixture(feat)
+    q = fit_mixture(feat)
     feat = feat.with_columns(pl.Series("q_trend", q))
-    GMM_ART.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"gmm": gmm, "trend_idx": trend_idx, "min_n": MIN_N_FIT}, GMM_ART)
-    print(f"wrote {GMM_ART}")
     FEAT_OUT.parent.mkdir(parents=True, exist_ok=True)
     feat.write_parquet(FEAT_OUT)
     print(f"wrote {FEAT_OUT} rows={feat.height}")
