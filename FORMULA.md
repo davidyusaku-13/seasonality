@@ -19,12 +19,12 @@ Instead, the question is:
 
 The final output should look conceptually like:
 
-| Month | P(Trend) | P(Sideways) |
-|---|---:|---:|
-| January | 68% | 32% |
-| February | 44% | 56% |
-| March | 72% | 28% |
-| ... | ... | ... |
+| Month    | P(Trend) | P(Sideways) |
+| -------- | -------: | ----------: |
+| January  |      68% |         32% |
+| February |      44% |         56% |
+| March    |      72% |         28% |
+| ...      |      ... |         ... |
 
 The classification should be derived entirely from **price behavior**, not from strategy performance.
 
@@ -98,7 +98,7 @@ However, the core formula does not require every OHLC field equally.
 The important values are:
 
 \[
-\boxed{H_t,\ L_t,\ C_t,\ C_{t-1}}
+\boxed{H*t,\ L_t,\ C_t,\ C*{t-1}}
 \]
 
 Open is not currently required as a separate feature.
@@ -131,11 +131,11 @@ These produce three independent measurements:
 
 \[
 \boxed{
-T_{\text{range}},
+T*{\text{range}},
 \quad
-T_{\text{direction}},
+T*{\text{direction}},
 \quad
-T_{\text{mono}}
+T\_{\text{mono}}
 }
 \]
 
@@ -166,12 +166,12 @@ A sideways or choppy month repeatedly traverses the same region, generating larg
 For every D1 bar:
 
 \[
-TR_t
+TR*t
 =
-\max(H_t,C_{t-1})
--
-\min(L_t,C_{t-1})
-\]
+\max(H_t,C*{t-1})
+
+- \min(L*t,C*{t-1})
+  \]
 
 This is equivalent to the standard True Range definition.
 
@@ -191,9 +191,9 @@ Define:
 R_m
 =
 \max(C_0,H_1,H_2,\ldots,H_N)
--
-\min(C_0,L_1,L_2,\ldots,L_N)
-\]
+
+- \min(C_0,L_1,L_2,\ldots,L_N)
+  \]
 
 This is the full price span reached during the month, including the initial starting price.
 
@@ -203,13 +203,13 @@ Define:
 
 \[
 \boxed{
-T_{\text{range}}
+T*{\text{range}}
 =
 1-
 \frac{
 \ln
 \left(
-\frac{\sum_{t=1}^{N}TR_t}{R_m}
+\frac{\sum*{t=1}^{N}TR_t}{R_m}
 \right)
 }{
 \ln(N)
@@ -220,7 +220,7 @@ T_{\text{range}}
 Then clip numerically to:
 
 \[
-\boxed{0 \le T_{\text{range}} \le 1}
+\boxed{0 \le T\_{\text{range}} \le 1}
 \]
 
 This is closely related to an inverted normalized Choppiness-style measure.
@@ -228,13 +228,13 @@ This is closely related to an inverted normalized Choppiness-style measure.
 Interpretation:
 
 \[
-T_{\text{range}}\rightarrow1
+T\_{\text{range}}\rightarrow1
 \]
 
 means price expanded efficiently.
 
 \[
-T_{\text{range}}\rightarrow0
+T\_{\text{range}}\rightarrow0
 \]
 
 means cumulative movement was large relative to the range ultimately achieved.
@@ -297,11 +297,11 @@ Use Close-to-Close logarithmic returns:
 
 \[
 \boxed{
-r_t
+r*t
 =
 \ln
 \left(
-\frac{C_t}{C_{t-1}}
+\frac{C_t}{C*{t-1}}
 \right)
 }
 \]
@@ -309,7 +309,7 @@ r_t
 Log returns are preferred because they are additive across time:
 
 \[
-\sum_{t=1}^{N}r_t
+\sum\_{t=1}^{N}r_t
 =
 \ln
 \left(
@@ -323,16 +323,16 @@ Define:
 
 \[
 \boxed{
-T_{\text{direction}}
+T*{\text{direction}}
 =
 \frac{
 \left|
-\sum_{t=1}^{N}r_t
+\sum*{t=1}^{N}r*t
 \right|
 }{
 \sqrt{
 N
-\sum_{t=1}^{N}r_t^2
+\sum*{t=1}^{N}r_t^2
 }
 }
 }
@@ -341,7 +341,7 @@ N
 This is bounded by:
 
 \[
-\boxed{0\le T_{\text{direction}}\le1}
+\boxed{0\le T\_{\text{direction}}\le1}
 \]
 
 because of the Cauchy-Schwarz inequality.
@@ -359,7 +359,7 @@ r_1=r_2=\cdots=r_N
 then:
 
 \[
-T_{\text{direction}}=1
+T\_{\text{direction}}=1
 \]
 
 ### Sideways / alternating movement
@@ -379,7 +379,7 @@ then:
 and therefore:
 
 \[
-T_{\text{direction}}\approx0
+T\_{\text{direction}}\approx0
 \]
 
 ## Important Property — Single Giant Jump
@@ -402,7 +402,7 @@ For example:
 Then:
 
 \[
-T_{\text{direction}}
+T\_{\text{direction}}
 =
 \frac{1}{\sqrt{20}}
 \approx0.224
@@ -425,7 +425,7 @@ This fixes an important weakness of Kaufman's Efficiency Ratio.
 The same quantity can be written as:
 
 \[
-T_{\text{direction}}
+T*{\text{direction}}
 =
 \underbrace{
 \frac{
@@ -433,15 +433,15 @@ T_{\text{direction}}
 }{
 \sum |r_t|
 }
-}_{\text{Directional consistency}}
+}*{\text{Directional consistency}}
 \times
 \underbrace{
 \frac{
-\sum |r_t|
+\sum |r*t|
 }{
 \sqrt{N\sum r_t^2}
 }
-}_{\text{Movement participation}}
+}*{\text{Movement participation}}
 \]
 
 The first term measures how strongly movements agree in direction.
@@ -524,7 +524,7 @@ Then ignore direction by taking the absolute value:
 
 \[
 \boxed{
-T_{\text{mono}}
+T\_{\text{mono}}
 =
 |\tau_b|
 }
@@ -533,7 +533,7 @@ T_{\text{mono}}
 Therefore:
 
 \[
-\boxed{0\le T_{\text{mono}}\le1}
+\boxed{0\le T\_{\text{mono}}\le1}
 \]
 
 ## Interpretation
@@ -553,7 +553,7 @@ A persistent bearish trend:
 Because bullish and bearish trends are both trends:
 
 \[
-T_{\text{mono}}
+T\_{\text{mono}}
 =
 |\tau_b|
 \rightarrow1
@@ -573,12 +573,12 @@ Use the geometric mean:
 
 \[
 \boxed{
-S_m
+S*m
 =
 \sqrt[3]{
-T_{\text{range}}
-T_{\text{direction}}
-T_{\text{mono}}
+T*{\text{range}}
+T*{\text{direction}}
+T*{\text{mono}}
 }
 }
 \]
@@ -587,12 +587,12 @@ or equivalently:
 
 \[
 \boxed{
-S_m
+S*m
 =
 \left(
-T_{\text{range}}
-T_{\text{direction}}
-T_{\text{mono}}
+T*{\text{range}}
+T*{\text{direction}}
+T*{\text{mono}}
 \right)^{1/3}
 }
 \]
@@ -610,15 +610,15 @@ The arithmetic mean would allow one strong property to compensate excessively fo
 Example:
 
 \[
-T_{\text{range}}=0.90
+T\_{\text{range}}=0.90
 \]
 
 \[
-T_{\text{direction}}=0.90
+T\_{\text{direction}}=0.90
 \]
 
 \[
-T_{\text{mono}}=0.10
+T\_{\text{mono}}=0.10
 \]
 
 Arithmetic mean:
@@ -652,12 +652,12 @@ The preferred regime representation is therefore:
 
 \[
 \boxed{
-X_m
+X*m
 =
 [
-T_{\text{range}},
-T_{\text{direction}},
-T_{\text{mono}}
+T*{\text{range}},
+T*{\text{direction}},
+T*{\text{mono}}
 ]
 }
 \]
@@ -697,12 +697,12 @@ X_1,X_2,\ldots,X_M
 where:
 
 \[
-X_m
+X*m
 =
 [
-T_{\text{range}},
-T_{\text{direction}},
-T_{\text{mono}}
+T*{\text{range}},
+T*{\text{direction}},
+T*{\text{mono}}
 ]
 \]
 
@@ -714,9 +714,9 @@ Conceptually:
 p(X)
 =
 \pi_T f_T(X)
-+
-\pi_S f_S(X)
-\]
+
+- \pi_S f_S(X)
+  \]
 
 where:
 
@@ -793,10 +793,10 @@ Once every historical month has a trend probability, group observations by month
 For January:
 
 \[
-q_{\text{Jan},1},
-q_{\text{Jan},2},
+q*{\text{Jan},1},
+q*{\text{Jan},2},
 \ldots,
-q_{\text{Jan},Y}
+q\_{\text{Jan},Y}
 \]
 
 where \(Y\) is the number of years in the historical sample.
@@ -808,8 +808,8 @@ The simplest soft estimate is:
 P(\text{Trend}\mid\text{January})
 =
 \frac{1}{Y}
-\sum_{y=1}^{Y}
-q_{\text{Jan},y}
+\sum*{y=1}^{Y}
+q*{\text{Jan},y}
 }
 \]
 
@@ -868,7 +868,7 @@ N_m+1
 If the regime model provides:
 
 \[
-q_{m,y}
+q\_{m,y}
 =
 P(\text{Trend})
 \]
@@ -877,10 +877,10 @@ for each observation, an analogous smoothed estimator is:
 
 \[
 \boxed{
-P_m
+P*m
 =
 \frac{
-0.5+\sum_y q_{m,y}
+0.5+\sum_y q*{m,y}
 }{
 N_m+1
 }
@@ -895,20 +895,20 @@ A more complete implementation should also calculate uncertainty intervals rathe
 
 The final research result should eventually look approximately like:
 
-| Month | P(Trend) | P(Sideways) | Sample | Uncertainty |
-|---|---:|---:|---:|---:|
-| January | 68% | 32% | 20 | ... |
-| February | 44% | 56% | 20 | ... |
-| March | 72% | 28% | 20 | ... |
-| April | 38% | 62% | 20 | ... |
-| May | 51% | 49% | 20 | ... |
-| June | ... | ... | ... | ... |
-| July | ... | ... | ... | ... |
-| August | ... | ... | ... | ... |
-| September | ... | ... | ... | ... |
-| October | ... | ... | ... | ... |
-| November | ... | ... | ... | ... |
-| December | ... | ... | ... | ... |
+| Month     | P(Trend) | P(Sideways) | Sample | Uncertainty |
+| --------- | -------: | ----------: | -----: | ----------: |
+| January   |      68% |         32% |     20 |         ... |
+| February  |      44% |         56% |     20 |         ... |
+| March     |      72% |         28% |     20 |         ... |
+| April     |      38% |         62% |     20 |         ... |
+| May       |      51% |         49% |     20 |         ... |
+| June      |      ... |         ... |    ... |         ... |
+| July      |      ... |         ... |    ... |         ... |
+| August    |      ... |         ... |    ... |         ... |
+| September |      ... |         ... |    ... |         ... |
+| October   |      ... |         ... |    ... |         ... |
+| November  |      ... |         ... |    ... |         ... |
+| December  |      ... |         ... |    ... |         ... |
 
 This represents:
 
@@ -930,9 +930,9 @@ Standard efficiency ratio:
 ER
 =
 \frac{
-|C_N-C_0|
+|C*N-C_0|
 }{
-\sum_{t=1}^{N}|C_t-C_{t-1}|
+\sum*{t=1}^{N}|C*t-C*{t-1}|
 }
 \]
 
@@ -963,7 +963,7 @@ That is undesirable.
 The proposed directional coherence measure instead gives:
 
 \[
-T_{\text{direction}}
+T\_{\text{direction}}
 =
 \frac{1}{\sqrt N}
 \]
@@ -1148,7 +1148,7 @@ then the entire month was mathematically unchanged.
 Set:
 
 \[
-T_{\text{direction}}=0
+T\_{\text{direction}}=0
 \]
 
 because there was no trend.
@@ -1176,12 +1176,12 @@ For each calendar month containing \(N\) D1 bars:
 ## Step 1 — True Range
 
 \[
-TR_t
+TR*t
 =
-\max(H_t,C_{t-1})
--
-\min(L_t,C_{t-1})
-\]
+\max(H_t,C*{t-1})
+
+- \min(L*t,C*{t-1})
+  \]
 
 ## Step 2 — Monthly Envelope
 
@@ -1189,15 +1189,15 @@ TR_t
 R_m
 =
 \max(C_0,H_1,\ldots,H_N)
--
-\min(C_0,L_1,\ldots,L_N)
-\]
+
+- \min(C_0,L_1,\ldots,L_N)
+  \]
 
 ## Step 3 — Range Efficiency
 
 \[
 \boxed{
-T_{\text{range}}
+T\_{\text{range}}
 =
 1-
 \frac{
@@ -1214,11 +1214,11 @@ T_{\text{range}}
 ## Step 4 — Log Returns
 
 \[
-r_t
+r*t
 =
 \ln
 \left(
-\frac{C_t}{C_{t-1}}
+\frac{C_t}{C*{t-1}}
 \right)
 \]
 
@@ -1226,7 +1226,7 @@ r_t
 
 \[
 \boxed{
-T_{\text{direction}}
+T\_{\text{direction}}
 =
 \frac{
 |\sum r_t|
@@ -1248,7 +1248,7 @@ p_t=\ln(C_t)
 
 \[
 \boxed{
-T_{\text{mono}}
+T\_{\text{mono}}
 =
 |\tau_b(t,p_t)|
 }
@@ -1258,12 +1258,12 @@ T_{\text{mono}}
 
 \[
 \boxed{
-S_m
+S*m
 =
 \left(
-T_{\text{range}}
-T_{\text{direction}}
-T_{\text{mono}}
+T*{\text{range}}
+T*{\text{direction}}
+T*{\text{mono}}
 \right)^{1/3}
 }
 \]
@@ -1272,12 +1272,12 @@ T_{\text{mono}}
 
 \[
 \boxed{
-X_m
+X*m
 =
 [
-T_{\text{range}},
-T_{\text{direction}},
-T_{\text{mono}}
+T*{\text{range}},
+T*{\text{direction}},
+T*{\text{mono}}
 ]
 }
 \]
@@ -1302,8 +1302,8 @@ For calendar month \(j\):
 \boxed{
 P(\text{Trend}\mid j)
 =
-\frac{1}{N_j}
-\sum_y q_{j,y}
+\frac{1}{N*j}
+\sum_y q*{j,y}
 }
 \]
 
@@ -1394,11 +1394,11 @@ T_{\text{mono}}
 
 This is preferable to a single technical indicator because each component captures a different failure mode:
 
-| Component | Main problem detected |
-|---|---|
-| \(T_{\text{range}}\) | intraday wandering / repeated range traversal |
-| \(T_{\text{direction}}\) | cancellation and movement concentrated in a few days |
-| \(T_{\text{mono}}\) | trend reversal or poor temporal persistence |
+| Component                 | Main problem detected                                |
+| ------------------------- | ---------------------------------------------------- |
+| \(T\_{\text{range}}\)     | intraday wandering / repeated range traversal        |
+| \(T\_{\text{direction}}\) | cancellation and movement concentrated in a few days |
+| \(T\_{\text{mono}}\)      | trend reversal or poor temporal persistence          |
 
 Together they provide a compact, parameter-light definition of monthly market regime.
 

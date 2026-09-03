@@ -68,22 +68,31 @@ def main() -> None:
     print(f"downloaded {len(rates)} bars")
     mt5.shutdown()
 
-    df = pl.DataFrame(
-        {
-            "time": [datetime.fromtimestamp(int(r["time"]), tz=timezone.utc) for r in rates],
-            "open": [float(r["open"]) for r in rates],
-            "high": [float(r["high"]) for r in rates],
-            "low": [float(r["low"]) for r in rates],
-            "close": [float(r["close"]) for r in rates],
-            "tick_volume": [int(r["tick_volume"]) for r in rates],
-            "spread": [int(r["spread"]) for r in rates],
-            "real_volume": [int(r["real_volume"]) for r in rates],
-        }
-    ).with_columns(pl.col("time").dt.date().alias("date")).sort("time")
+    df = (
+        pl.DataFrame(
+            {
+                "time": [
+                    datetime.fromtimestamp(int(r["time"]), tz=timezone.utc)
+                    for r in rates
+                ],
+                "open": [float(r["open"]) for r in rates],
+                "high": [float(r["high"]) for r in rates],
+                "low": [float(r["low"]) for r in rates],
+                "close": [float(r["close"]) for r in rates],
+                "tick_volume": [int(r["tick_volume"]) for r in rates],
+                "spread": [int(r["spread"]) for r in rates],
+                "real_volume": [int(r["real_volume"]) for r in rates],
+            }
+        )
+        .with_columns(pl.col("time").dt.date().alias("date"))
+        .sort("time")
+    )
 
     # NYSE holidays for flagging (Christmas, New Year, Good Friday, observed)
     start_d, end_d = df["date"].min(), df["date"].max()
-    nyse = holidays.financial_holidays("NYSE", years=range(start_d.year, end_d.year + 1))
+    nyse = holidays.financial_holidays(
+        "NYSE", years=range(start_d.year, end_d.year + 1)
+    )
 
     df = df.with_columns(
         pl.lit(False).alias("is_filled"),
@@ -114,7 +123,10 @@ def main() -> None:
 
         fill_df = pl.DataFrame(
             {
-                "time": [datetime(d.year, d.month, d.day, tzinfo=timezone.utc) for d, _ in filled_rows],
+                "time": [
+                    datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+                    for d, _ in filled_rows
+                ],
                 "open": [c for _, c in filled_rows],
                 "high": [c for _, c in filled_rows],
                 "low": [c for _, c in filled_rows],
@@ -135,7 +147,9 @@ def main() -> None:
     n_filled = int(df["is_filled"].sum())
     print(f"wrote {OUT}: rows={df.height} filled={n_filled}")
     print(f"range {df['date'].min()} .. {df['date'].max()}")
-    for filled, holiday, n in sorted(df.group_by(["is_filled", "is_holiday"]).len().rows()):
+    for filled, holiday, n in sorted(
+        df.group_by(["is_filled", "is_holiday"]).len().rows()
+    ):
         print(f"is_filled={filled} is_holiday={holiday} n={n}")
 
 

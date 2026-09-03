@@ -41,6 +41,7 @@ def case(name):
     def deco(fn):
         CASES[name] = fn
         return fn
+
     return deco
 
 
@@ -131,18 +132,43 @@ def main() -> int:
     tm = {k: v[2] for k, v in res.items()}
     tr = {k: v[0] for k, v in res.items()}
     checks = [
-        ("bull/bear direction-agnostic", abs(s["smooth_bull"] - s["smooth_bear"]) < 0.05),
-        ("smooth trends score high", s["smooth_bull"] > 0.75 and s["smooth_bear"] > 0.75),
+        (
+            "bull/bear direction-agnostic",
+            abs(s["smooth_bull"] - s["smooth_bear"]) < 0.05,
+        ),
+        (
+            "smooth trends score high",
+            s["smooth_bull"] > 0.75 and s["smooth_bear"] > 0.75,
+        ),
         ("staircase trends", s["staircase"] > 0.55),
         ("single shock: T_dir == 1/sqrt(N)", abs(td["shock"] - 1 / np.sqrt(N)) < 0.01),
         ("single shock not a perfect trend", s["shock"] < 0.60),
-        ("reversal penalized", s["trend_reversal"] < s["smooth_bull"] - 0.15 and tm["trend_reversal"] < 0.6),
-        ("chop scores low", s["volatile_sideways"] < 0.25 and s["quiet_sideways"] < 0.35),
-        ("wicks hurt efficiency only", tr["trend_wicks"] < tr["smooth_bull"] and s["trend_wicks"] > 0.45),
-        ("random walk not systematically trending", s["random_walk"] < 0.65 and random_walk_mean_s() < 0.4),
-        ("clean trends beat chop+reversal",
-         min(s["smooth_bull"], s["smooth_bear"], s["staircase"]) > max(s["volatile_sideways"], s["quiet_sideways"], s["trend_reversal"])),
-        ("mixed sits in the middle", s["volatile_sideways"] < s["mixed"] < s["smooth_bull"]),
+        (
+            "reversal penalized",
+            s["trend_reversal"] < s["smooth_bull"] - 0.15
+            and tm["trend_reversal"] < 0.6,
+        ),
+        (
+            "chop scores low",
+            s["volatile_sideways"] < 0.25 and s["quiet_sideways"] < 0.35,
+        ),
+        (
+            "wicks hurt efficiency only",
+            tr["trend_wicks"] < tr["smooth_bull"] and s["trend_wicks"] > 0.45,
+        ),
+        (
+            "random walk not systematically trending",
+            s["random_walk"] < 0.65 and random_walk_mean_s() < 0.4,
+        ),
+        (
+            "clean trends beat chop+reversal",
+            min(s["smooth_bull"], s["smooth_bear"], s["staircase"])
+            > max(s["volatile_sideways"], s["quiet_sideways"], s["trend_reversal"]),
+        ),
+        (
+            "mixed sits in the middle",
+            s["volatile_sideways"] < s["mixed"] < s["smooth_bull"],
+        ),
     ]
     ok_all = True
     for label, ok in checks:

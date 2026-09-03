@@ -32,8 +32,20 @@ FIG_SEASON = Path("seasonality.png")
 FIG_TIME = Path("monthly_scores.png")
 MIN_N_FIT = 15
 
-MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MONTH_NAMES = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+]
 
 
 def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
@@ -63,7 +75,11 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
     t_mono = float(abs(tau)) if tau is not None and np.isfinite(tau) else 0.0
     t_mono = float(np.clip(t_mono, 0, 1))
 
-    s = float((t_range * t_dir * t_mono) ** (1 / 3)) if min(t_range, t_dir, t_mono) > 0 else 0.0
+    s = (
+        float((t_range * t_dir * t_mono) ** (1 / 3))
+        if min(t_range, t_dir, t_mono) > 0
+        else 0.0
+    )
     return t_range, t_dir, t_mono, s
 
 
@@ -73,7 +89,9 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
     yms = sorted(set((d.year, d.month) for d in real["date"].to_list()))
     rows = []
     for y, m in yms:
-        mb = real.filter((pl.col("date").dt.year() == y) & (pl.col("date").dt.month() == m)).sort("time")
+        mb = real.filter(
+            (pl.col("date").dt.year() == y) & (pl.col("date").dt.month() == m)
+        ).sort("time")
         first_time = mb["time"].min()
         idx = times.index(first_time)
         c0 = closes_all[idx - 1] if idx > 0 else float(mb["open"].to_list()[0])
@@ -81,28 +99,45 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
         low = mb["low"].to_numpy()
         c = mb["close"].to_numpy()
         tr, td, tm, s = month_features(h, low, c, float(c0))
-        rows.append({
-            "year": y, "month": m, "ym": f"{y}-{m:02d}",
-            "start": mb["date"].min(), "end": mb["date"].max(),
-            "n": mb.height, "c0": float(c0), "cn": float(c[-1]),
-            "ret_total": float(np.log(c[-1] / c0)),
-            "t_range": tr, "t_direction": td, "t_mono": tm, "s": s,
-        })
+        rows.append(
+            {
+                "year": y,
+                "month": m,
+                "ym": f"{y}-{m:02d}",
+                "start": mb["date"].min(),
+                "end": mb["date"].max(),
+                "n": mb.height,
+                "c0": float(c0),
+                "cn": float(c[-1]),
+                "ret_total": float(np.log(c[-1] / c0)),
+                "t_range": tr,
+                "t_direction": td,
+                "t_mono": tm,
+                "s": s,
+            }
+        )
     return pl.DataFrame(rows).sort(["year", "month"])
 
 
 def fit_mixture(feat: pl.DataFrame) -> np.ndarray:
     X = feat.select(["t_range", "t_direction", "t_mono"]).to_numpy()
     fit_mask = (feat["n"] >= MIN_N_FIT).to_numpy()
-    gmm = GaussianMixture(n_components=2, covariance_type="full",
-                          n_init=10, random_state=0, reg_covar=1e-3)
+    gmm = GaussianMixture(
+        n_components=2,
+        covariance_type="full",
+        n_init=10,
+        random_state=0,
+        reg_covar=1e-3,
+    )
     gmm.fit(X[fit_mask])
     order = np.argsort(gmm.means_.mean(axis=1))
     trend_idx = int(order[1])  # component with larger mean values = Trend
     q = gmm.predict_proba(X)[:, trend_idx]
-    print(f"gmm fit on {int(fit_mask.sum())}/{len(X)} months (N>={MIN_N_FIT}); "
-          f"trend_comp={trend_idx} means={gmm.means_.round(3).tolist()} "
-          f"weights={gmm.weights_.round(3).tolist()}")
+    print(
+        f"gmm fit on {int(fit_mask.sum())}/{len(X)} months (N>={MIN_N_FIT}); "
+        f"trend_comp={trend_idx} means={gmm.means_.round(3).tolist()} "
+        f"weights={gmm.weights_.round(3).tolist()}"
+    )
     return q
 
 
@@ -117,14 +152,21 @@ def calendar_table(feat: pl.DataFrame) -> pl.DataFrame:
         shrunk = float((0.5 + qq.sum()) / (n + 1)) if n else float("nan")
         std = float(qq.std(ddof=1)) if n > 1 else 0.0
         se = std / np.sqrt(n) if n else 0.0
-        rows.append({
-            "month": m, "month_name": MONTH_NAMES[m - 1], "n": n,
-            "p_trend_raw": raw, "p_trend": shrunk, "p_sideways": 1 - shrunk,
-            "std": std, "ci95_lo": max(0.0, shrunk - 1.96 * se),
-            "ci95_hi": min(1.0, shrunk + 1.96 * se),
-            "q_min": float(qq.min()) if n else float("nan"),
-            "q_max": float(qq.max()) if n else float("nan"),
-        })
+        rows.append(
+            {
+                "month": m,
+                "month_name": MONTH_NAMES[m - 1],
+                "n": n,
+                "p_trend_raw": raw,
+                "p_trend": shrunk,
+                "p_sideways": 1 - shrunk,
+                "std": std,
+                "ci95_lo": max(0.0, shrunk - 1.96 * se),
+                "ci95_hi": min(1.0, shrunk + 1.96 * se),
+                "q_min": float(qq.min()) if n else float("nan"),
+                "q_max": float(qq.max()) if n else float("nan"),
+            }
+        )
     return pl.DataFrame(rows).sort("month")
 
 
@@ -147,18 +189,29 @@ def main() -> None:
     print(f"{'mon':<5} {'n':>3} {'P(tr)':>7} {'P(sw)':>7} {'raw':>7} {'95% CI':>15}")
     print("-" * 52)
     for r in tab.to_dicts():
-        print(f"{r['month_name']:<5} {r['n']:>3} {r['p_trend']:>7.1%} {r['p_sideways']:>7.1%} "
-              f"{r['p_trend_raw']:>7.1%} [{r['ci95_lo']:>5.1%},{r['ci95_hi']:>5.1%}]")
+        print(
+            f"{r['month_name']:<5} {r['n']:>3} {r['p_trend']:>7.1%} {r['p_sideways']:>7.1%} "
+            f"{r['p_trend_raw']:>7.1%} [{r['ci95_lo']:>5.1%},{r['ci95_hi']:>5.1%}]"
+        )
 
     # fig 1: seasonality bars with CI
     fig, ax = plt.subplots(figsize=(12, 5))
     xs = tab["month"].to_list()
     ax.bar(xs, tab["p_trend"].to_list(), width=0.7, label="P(Trend) shrunk")
-    ax.errorbar(xs, tab["p_trend"].to_list(),
-                yerr=[(np.array(tab["p_trend"]) - np.array(tab["ci95_lo"])),
-                      (np.array(tab["ci95_hi"]) - np.array(tab["p_trend"]))],
-                fmt="none", ecolor="black", capsize=4)
-    ax.plot(xs, tab["p_trend_raw"].to_list(), marker="o", linewidth=1, label="raw mean q")
+    ax.errorbar(
+        xs,
+        tab["p_trend"].to_list(),
+        yerr=[
+            (np.array(tab["p_trend"]) - np.array(tab["ci95_lo"])),
+            (np.array(tab["ci95_hi"]) - np.array(tab["p_trend"])),
+        ],
+        fmt="none",
+        ecolor="black",
+        capsize=4,
+    )
+    ax.plot(
+        xs, tab["p_trend_raw"].to_list(), marker="o", linewidth=1, label="raw mean q"
+    )
     for r in tab.to_dicts():
         ax.text(r["month"], r["p_trend"] + 0.02, f"n={r['n']}", ha="center", fontsize=8)
     ax.set_ylim(0, 1)
@@ -173,12 +226,21 @@ def main() -> None:
 
     # fig 2: q_m and S_m through time
     fig2, ax2 = plt.subplots(figsize=(14, 4))
-    ax2.plot(feat["ym"].to_list(), feat["q_trend"].to_list(), linewidth=1, label="q=P(Trend|X)")
-    ax2.plot(feat["ym"].to_list(), feat["s"].to_list(), linewidth=1, alpha=0.7, label="S_m")
+    ax2.plot(
+        feat["ym"].to_list(),
+        feat["q_trend"].to_list(),
+        linewidth=1,
+        label="q=P(Trend|X)",
+    )
+    ax2.plot(
+        feat["ym"].to_list(), feat["s"].to_list(), linewidth=1, alpha=0.7, label="S_m"
+    )
     ax2.set_ylim(0, 1)
     step = max(1, feat.height // 20)
     ax2.set_xticks(range(0, feat.height, step))
-    ax2.set_xticklabels([feat["ym"][i] for i in range(0, feat.height, step)], rotation=30, ha="right")
+    ax2.set_xticklabels(
+        [feat["ym"][i] for i in range(0, feat.height, step)], rotation=30, ha="right"
+    )
     ax2.set_ylabel("0=ranging 1=trend")
     ax2.set_title("Monthly trend probability through time")
     ax2.legend()
