@@ -41,7 +41,14 @@ def draw_year(year: int, real: pl.DataFrame, feat: pl.DataFrame) -> Path:
     ax_p.set_ylabel("close (USD)")
     ax_p.legend()
 
-    ax_s.bar(months, yf["s"].to_list(), width=0.7, alpha=0.85, label="S_m")
+    bars = ax_s.bar(months, yf["s"].to_list(), width=0.7, alpha=0.85, label="S_m")
+    for rect, v in zip(bars, yf["s"].to_list()):
+        h = rect.get_height()
+        x = rect.get_x() + rect.get_width() / 2
+        if h > 0.12:
+            ax_s.text(x, h / 2, f"{v:.2f}", ha="center", va="center", fontsize=8, color="white")
+        else:
+            ax_s.text(x, h + 0.015, f"{v:.2f}", ha="center", va="bottom", fontsize=8, color="black")
     ax_s.plot(months, yf["q_trend"].to_list(), marker="o", linewidth=2, color="black", label="q_m")
     ax_s.plot(months, yf["t_range"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_range")
     ax_s.plot(months, yf["t_direction"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_dir")
