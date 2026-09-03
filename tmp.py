@@ -1,4 +1,4 @@
-"""XAUUSD 2025: candlesticks + seasonality together (mirrors 4-charts.py)."""
+"""XAUUSD 2025: close line + seasonality together (mirrors 4-charts.py)."""
 
 from pathlib import Path
 
@@ -25,41 +25,23 @@ def main() -> None:
     if yd.height == 0:
         raise SystemExit(f"no rows for {YEAR}")
     dates = yd["date"].to_list()
-    opens = yd["open"].to_list()
-    highs = yd["high"].to_list()
-    lows = yd["low"].to_list()
     closes = yd["close"].to_list()
     months = yf["month"].to_list()
 
     fig, (ax_p, ax_s) = plt.subplots(
         2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [3, 1]}
     )
-    up = [c >= o for c, o in zip(closes, opens)]
-    dn = [not u for u in up]
-    for flag, color, label in ((up, "green", "up"), (dn, "red", "down")):
-        d = [x for x, f in zip(dates, flag) if f]
-        o = [x for x, f in zip(opens, flag) if f]
-        h = [x for x, f in zip(highs, flag) if f]
-        lo = [x for x, f in zip(lows, flag) if f]
-        c = [x for x, f in zip(closes, flag) if f]
-        ax_p.vlines(d, lo, h, colors=color, linewidths=0.8)
-        ax_p.bar(
-            d,
-            [ci - oi for ci, oi in zip(c, o)],
-            bottom=o,
-            width=0.6,
-            color=color,
-            label=label,
-        )
+    ax_p.plot(dates, closes, linewidth=1.2, label="close")
+    ax_p.legend()
     seen: dict = {}
     for d in dates:
         seen.setdefault(d.month, d)
     for mm in sorted(seen):
         ax_p.axvline(seen[mm], color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
     ax_p.axvline(dates[-1], color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax_p.set_xlim(dates[0], dates[-1])
     ax_p.set_title(f"XAUUSD D1 {YEAR} (vertical = month separator)")
     ax_p.set_ylabel("close (USD)")
-    ax_p.legend()
 
     bars = ax_s.bar(months, yf["s"].to_list(), width=0.7, alpha=0.85, label="S_m")
     for rect, v in zip(bars, yf["s"].to_list()):
