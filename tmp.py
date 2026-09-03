@@ -12,7 +12,7 @@ import polars as pl
 from scipy.stats import kendalltau
 
 SRC = Path("data/xauusd_d1.parquet")
-OUT = Path("xauusd_2025.png")
+OUT = Path("charts/yearly/xauusd_2025.png")
 
 
 def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
@@ -108,6 +108,7 @@ def main() -> None:
     ax_s.legend(ncol=4)
 
     fig.tight_layout()
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(OUT, dpi=150)
     print(f"saved={OUT.resolve()}")
     plt.show()
