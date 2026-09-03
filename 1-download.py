@@ -9,7 +9,7 @@
 """
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import holidays
@@ -71,10 +71,7 @@ def main() -> None:
     df = (
         pl.DataFrame(
             {
-                "time": [
-                    datetime.fromtimestamp(int(r["time"]), tz=timezone.utc)
-                    for r in rates
-                ],
+                "time": [datetime.fromtimestamp(int(r["time"]), tz=UTC) for r in rates],
                 "open": [float(r["open"]) for r in rates],
                 "high": [float(r["high"]) for r in rates],
                 "low": [float(r["low"]) for r in rates],
@@ -124,8 +121,7 @@ def main() -> None:
         fill_df = pl.DataFrame(
             {
                 "time": [
-                    datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-                    for d, _ in filled_rows
+                    datetime(d.year, d.month, d.day, tzinfo=UTC) for d, _ in filled_rows
                 ],
                 "open": [c for _, c in filled_rows],
                 "high": [c for _, c in filled_rows],

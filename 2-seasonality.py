@@ -70,7 +70,7 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
     p = np.concatenate([[np.log(c0)], np.log(c)])
     try:
         tau, _ = kendalltau(np.arange(n + 1), p)
-    except Exception:
+    except ValueError:
         tau = np.nan
     t_mono = float(abs(tau)) if tau is not None and np.isfinite(tau) else 0.0
     t_mono = float(np.clip(t_mono, 0, 1))
@@ -86,7 +86,7 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
 def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
     times = real["time"].to_list()
     closes_all = real["close"].to_list()
-    yms = sorted(set((d.year, d.month) for d in real["date"].to_list()))
+    yms = sorted({(d.year, d.month) for d in real["date"].to_list()})
     rows = []
     for y, m in yms:
         mb = real.filter(

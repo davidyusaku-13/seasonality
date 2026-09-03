@@ -1,6 +1,6 @@
-"""Yearly drawings: raw close + calendar-month seasonality together.
+"""Yearly drawings: candlesticks + calendar-month seasonality together.
 
-Top: daily close with month separators. Bottom: S_m bars, q_m line,
+Top: daily candlesticks with month separators. Bottom: S_m bars, q_m line,
 T components (0-1). One PNG per year in charts/yearly/xauusd_YYYY.png.
 Prices from data/xauusd_d1.parquet (real bars); features from
 data/monthly_features.parquet (no recompute).
@@ -26,13 +26,32 @@ def draw_year(year: int, real: pl.DataFrame, feat: pl.DataFrame) -> Path:
     if yd.height == 0:
         raise SystemExit(f"no rows for {year}")
     dates = yd["date"].to_list()
+    opens = yd["open"].to_list()
+    highs = yd["high"].to_list()
+    lows = yd["low"].to_list()
     closes = yd["close"].to_list()
     months = yf["month"].to_list()
 
     fig, (ax_p, ax_s) = plt.subplots(
         2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [3, 1]}
     )
-    ax_p.plot(dates, closes, linewidth=1.2, label="close")
+    up = [c >= o for c, o in zip(closes, opens)]
+    dn = [not u for u in up]
+    for flag, color, label in ((up, "green", "up"), (dn, "red", "down")):
+        d = [x for x, f in zip(dates, flag) if f]
+        o = [x for x, f in zip(opens, flag) if f]
+        h = [x for x, f in zip(highs, flag) if f]
+        lo = [x for x, f in zip(lows, flag) if f]
+        c = [x for x, f in zip(closes, flag) if f]
+        ax_p.vlines(d, lo, h, colors=color, linewidths=0.8)
+        ax_p.bar(
+            d,
+            [ci - oi for ci, oi in zip(c, o)],
+            bottom=o,
+            width=0.6,
+            color=color,
+            label=label,
+        )
     seen: dict = {}
     for d in dates:
         seen.setdefault(d.month, d)
