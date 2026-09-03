@@ -12,6 +12,7 @@ SRC = Path("data/xauusd_d1.parquet")
 FEAT = Path("data/monthly_features.parquet")
 OUT = Path("charts/yearly/xauusd_2025.png")
 YEAR = 2025
+SHOW_LINES = False  # set True to re-show q_m / T lines (hidden, not removed)
 
 
 def main() -> None:
@@ -46,10 +47,14 @@ def main() -> None:
             ax_s.text(x, h / 2, f"{v:.2f}", ha="center", va="center", fontsize=8, color="white")
         else:
             ax_s.text(x, h + 0.015, f"{v:.2f}", ha="center", va="bottom", fontsize=8, color="black")
-    ax_s.plot(months, yf["q_trend"].to_list(), marker="o", linewidth=2, color="black", label="q_m")
-    ax_s.plot(months, yf["t_range"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_range")
-    ax_s.plot(months, yf["t_direction"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_dir")
-    ax_s.plot(months, yf["t_mono"].to_list(), marker=".", linewidth=1, alpha=0.7, label="T_mono")
+    ax_s.plot(months, yf["q_trend"].to_list(), marker="o", linewidth=2, color="black",
+              label="q_m" if SHOW_LINES else "_q_m", visible=SHOW_LINES)
+    ax_s.plot(months, yf["t_range"].to_list(), marker=".", linewidth=1, alpha=0.7,
+              label="T_range" if SHOW_LINES else "_T_range", visible=SHOW_LINES)
+    ax_s.plot(months, yf["t_direction"].to_list(), marker=".", linewidth=1, alpha=0.7,
+              label="T_dir" if SHOW_LINES else "_T_dir", visible=SHOW_LINES)
+    ax_s.plot(months, yf["t_mono"].to_list(), marker=".", linewidth=1, alpha=0.7,
+              label="T_mono" if SHOW_LINES else "_T_mono", visible=SHOW_LINES)
     for mm in months:
         ax_s.axvline(mm - 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
     ax_s.axvline(months[-1] + 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
