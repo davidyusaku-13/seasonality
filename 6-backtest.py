@@ -9,6 +9,7 @@ mean) plus hard accuracy and calibration bins.
 Exit 0 always; this measures skill, it does not gate.
 """
 
+import importlib.util
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,10 @@ FEAT = Path("data/monthly_features.parquet")
 MIN_N = 15
 FIRST_TEST_YEAR = 2012
 FEATS = ["t_range", "t_direction", "t_mono"]
+SPEC = Path(__file__).with_name("2-seasonality.py")
+_spec = importlib.util.spec_from_file_location("seasonality2", SPEC)
+s2 = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(s2)
 
 
 def fit_gmm(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -39,7 +44,9 @@ def main() -> None:
     years = sorted(set(feat["year"].to_list()))
     recs = []
     for y in [t for t in years if t >= FIRST_TEST_YEAR]:
-        train = feat.filter((pl.col("year") < y) & (pl.col("n") >= MIN_N))
+        train = feat.filter(
+            (pl.col("year") < y) & pl.col("is_complete") & (pl.col("n") >= MIN_N)
+        )
         if train.height < 24:
             continue
         Xtr = train.select(FEATS).to_numpy()
@@ -49,7 +56,9 @@ def main() -> None:
             qq = qtr[train["month"].to_numpy() == m]
             cal[m] = float((0.5 + qq.sum()) / (len(qq) + 1)) if len(qq) else 0.5
         clima = float(qtr.mean())
-        test = feat.filter((pl.col("year") == y) & (pl.col("n") >= MIN_N))
+        test = feat.filter(
+            (pl.col("year") == y) & pl.col("is_complete") & (pl.col("n") >= MIN_N)
+        )
         Xte = test.select(FEATS).to_numpy()
         trend_idx = int(np.argsort(gmm.means_.mean(axis=1))[1])
         qre = gmm.predict_proba(Xte)[:, trend_idx]
@@ -59,7 +68,7 @@ def main() -> None:
     p = np.array([r[2] for r in recs])
     r_ = np.array([r[3] for r in recs])
     c = np.array([r[4] for r in recs])
-    brier, brier_clima = float(np.mean((p - r_) ** 2)), float(np.mean((c - r_) ** 2))
+    brier, brier_clima = s2.expected_brier(p, r_), s2.expected_brier(c, r_)
     acc = float(np.mean((p > 0.5) == (r_ > 0.5)))
     acc_clima = float(np.mean((c > 0.5) == (r_ > 0.5)))
     print(f"predictions: {len(recs)} month-years")

@@ -1,10 +1,9 @@
-"""As-of-today regime view: trailing scored months + next-month projection.
+"""As-of-today regime view: trailing scored months + live-month projection.
 
-Reads data/monthly_features.parquet + data/seasonality_by_month.csv (no MT5,
-so rerun 1-download.py first to refresh). A month counts as complete when
-N>=15 (same bar as the GMM fit). The projection for the upcoming month is
-the calendar-table row (shrunk P(Trend) + 95% CI): a real projection with
-no within-month (k>0) data.
+Reads data/monthly_features.parquet + data/seasonality_by_month.csv (no MT5;
+rerun 1-download.py and then 2-seasonality.py to refresh). Calendar completion
+and the N>=15 validity gate are separate. The projection for the live month is
+the calendar-table row (shrunk P(Trend) + 95% CI), with no within-month data.
 
 Output: charts/now.png
 """
@@ -28,18 +27,18 @@ def main() -> None:
     feat = pl.read_parquet(FEAT).sort(["year", "month"])
     tab = pl.read_csv(TAB).sort("month")
 
-    rows = feat.to_dicts()
-    pending = []
-    while rows and rows[-1]["n"] < MIN_N:
-        pending.append(rows.pop())
+    rows = feat.filter(pl.col("is_complete") & (pl.col("n") >= MIN_N)).to_dicts()
     if not rows:
         raise SystemExit("no complete months in features")
-    last = rows[-1]
-    py, pm = (
-        (last["year"], last["month"] + 1)
-        if last["month"] < 12
-        else (last["year"] + 1, 1)
-    )
+    latest = feat.to_dicts()[-1]
+    if latest["is_complete"]:
+        py, pm = (
+            (latest["year"], latest["month"] + 1)
+            if latest["month"] < 12
+            else (latest["year"] + 1, 1)
+        )
+    else:
+        py, pm = latest["year"], latest["month"]
     proj = tab.filter(pl.col("month") == pm).to_dicts()[0]
     trail = rows[-TRAIL:]
     asof = feat["end"].max()

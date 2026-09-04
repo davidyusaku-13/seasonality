@@ -51,9 +51,24 @@ check(
 tr, td, tm, s = mf(*ohlc(np.array([101.0, 100.0]), 0.0, 100.0), 100.0)
 check("round-trip T_range is 0", tr == 0.0 and s == 0.0, f"T_range={tr} S={s}")
 
-# 3. flat month -> all zeros, no nan
+# 3. flat month -> invalid / degenerate (FORMULA sec 17.2)
 tr, td, tm, s = mf(*ohlc(np.full(10, C0)), C0)
-check("flat month is 0, no nan", (tr, td, tm, s) == (0.0, 0.0, 0.0, 0.0))
+check("flat month is invalid", bool(np.isnan([tr, td, tm, s]).all()))
+
+# Incomplete months must not enter calendar averages, even when they have N>=15.
+fake = pl.DataFrame(
+    {
+        "month": [1, 1],
+        "n": [20, 20],
+        "is_complete": [True, False],
+        "q_trend": [0.2, 0.9],
+    }
+)
+jan = s2.calendar_table(fake).filter(pl.col("month") == 1).to_dicts()[0]
+check(
+    "incomplete N>=15 month excluded from calendar mean",
+    jan["n"] == 1 and abs(jan["p_trend_raw"] - 0.2) < 1e-12,
+)
 
 # 4. N=1 -> zeros, no div-by-zero
 tr, td, tm, s = mf(np.array([101.0]), np.array([99.0]), np.array([100.5]), 100.0)

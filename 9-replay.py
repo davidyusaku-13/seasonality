@@ -50,10 +50,13 @@ def fit_gmm(X: np.ndarray):
 
 def main() -> None:
     real = pl.read_parquet(SRC).filter(~pl.col("is_filled")).sort("time")
-    months = [m for m in s2.month_rows(real) if len(m["c"]) >= MIN_N]
+    months = [
+        m for m in s2.month_rows(real) if m["is_complete"] and len(m["c"]) >= MIN_N
+    ]
     by_ym = {m["ym"]: m for m in months}
-    targets = [f"2026-{m:02d}" for m in range(1, 9)]
-    assert all(t in by_ym for t in targets), "missing 2026 months"
+    targets = [m["ym"] for m in months if m["year"] == 2026]
+    if not targets:
+        raise SystemExit("no complete 2026 months")
 
     recs = []
     stab = []
@@ -94,11 +97,15 @@ def main() -> None:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(recs).write_csv(OUT)
-    bp = np.mean([(r["pred_q"] - r["real_q"]) ** 2 for r in recs])
-    bc = np.mean([(r["clima"] - r["real_q"]) ** 2 for r in recs])
+    pred = np.array([r["pred_q"] for r in recs])
+    clima = np.array([r["clima"] for r in recs])
+    realized = np.array([r["real_q"] for r in recs])
+    bp = s2.expected_brier(pred, realized)
+    bc = s2.expected_brier(clima, realized)
     print(f"wrote {OUT.resolve()}")
     print(
-        f"8-month replay: Brier proj={bp:.4f} clima={bc:.4f} skill={1 - bp / bc:+.3f}"
+        f"{len(recs)}-month replay: Brier proj={bp:.4f} clima={bc:.4f} "
+        f"skill={1 - bp / bc:+.3f}"
     )
     print(
         f"hard agree proj={np.mean([(r['pred_q'] > 0.5) == (r['real_q'] > 0.5) for r in recs]):.3f}"

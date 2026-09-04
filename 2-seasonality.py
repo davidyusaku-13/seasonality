@@ -12,8 +12,8 @@ Outputs:
   seasonality.png                (bar chart with 95% CI + sample counts)
   monthly_scores.png             (q_m and S_m through time)
 
-Mixture fit uses full months only (N>=15) so partial edge months
-(2007-06, 2026-09) don't distort components; q is predicted for all.
+Mixture fit uses completed, valid months only (N>=15) so partial edge months
+(2007-06, the live month) don't distort components; q is predicted where valid.
 """
 
 from pathlib import Path
@@ -57,9 +57,8 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
     tr = np.maximum(h, c_prev) - np.minimum(low, c_prev)
     rm = float(np.max(np.concatenate([[c0], h])) - np.min(np.concatenate([[c0], low])))
     if rm <= 0 or tr.sum() <= 0:
-        t_range = 0.0
-    else:
-        t_range = 1.0 - float(np.log(tr.sum() / rm) / np.log(n))
+        return (float("nan"),) * 4
+    t_range = 1.0 - float(np.log(tr.sum() / rm) / np.log(n))
     t_range = float(np.clip(t_range, 0, 1))
 
     r = np.log(c / c_prev)
@@ -88,6 +87,7 @@ def month_rows(real: pl.DataFrame) -> list[dict]:
     """Per-month OHLC arrays with prior close (real bars only)."""
     times = real["time"].to_list()
     closes_all = [float(v) for v in real["close"].to_list()]
+    latest = max((d.year, d.month) for d in real["date"].to_list())
     out = []
     for y, m in sorted({(d.year, d.month) for d in real["date"].to_list()}):
         mb = real.filter(
@@ -100,6 +100,7 @@ def month_rows(real: pl.DataFrame) -> list[dict]:
                 "year": y,
                 "month": m,
                 "ym": f"{y}-{m:02d}",
+                "is_complete": (y, m) < latest,
                 "h": np.array(mb["high"].to_list(), dtype=float),
                 "low": np.array(mb["low"].to_list(), dtype=float),
                 "c": np.array(mb["close"].to_list(), dtype=float),
@@ -113,6 +114,7 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
     times = real["time"].to_list()
     closes_all = real["close"].to_list()
     yms = sorted({(d.year, d.month) for d in real["date"].to_list()})
+    latest = max(yms)
     rows = []
     for y, m in yms:
         mb = real.filter(
@@ -130,6 +132,7 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
                 "year": y,
                 "month": m,
                 "ym": f"{y}-{m:02d}",
+                "is_complete": (y, m) < latest,
                 "start": mb["date"].min(),
                 "end": mb["date"].max(),
                 "n": mb.height,
@@ -147,7 +150,8 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
 
 def fit_mixture(feat: pl.DataFrame) -> np.ndarray:
     X = feat.select(["t_range", "t_direction", "t_mono"]).to_numpy()
-    fit_mask = (feat["n"] >= MIN_N_FIT).to_numpy()
+    valid_mask = np.isfinite(X).all(axis=1)
+    fit_mask = (feat["is_complete"] & (feat["n"] >= MIN_N_FIT)).to_numpy() & valid_mask
     gmm = GaussianMixture(
         n_components=2,
         covariance_type="full",
@@ -158,7 +162,8 @@ def fit_mixture(feat: pl.DataFrame) -> np.ndarray:
     gmm.fit(X[fit_mask])
     order = np.argsort(gmm.means_.mean(axis=1))
     trend_idx = int(order[1])  # component with larger mean values = Trend
-    q = gmm.predict_proba(X)[:, trend_idx]
+    q = np.full(len(X), np.nan)
+    q[valid_mask] = gmm.predict_proba(X[valid_mask])[:, trend_idx]
     print(
         f"gmm fit on {int(fit_mask.sum())}/{len(X)} months (N>={MIN_N_FIT}); "
         f"trend_comp={trend_idx} means={gmm.means_.round(3).tolist()} "
@@ -168,7 +173,11 @@ def fit_mixture(feat: pl.DataFrame) -> np.ndarray:
 
 
 def calendar_table(feat: pl.DataFrame) -> pl.DataFrame:
-    full = feat.filter(pl.col("n") >= MIN_N_FIT)
+    full = feat.filter(
+        pl.col("is_complete")
+        & (pl.col("n") >= MIN_N_FIT)
+        & pl.col("q_trend").is_finite()
+    )
     qv = full["q_trend"].to_numpy()
     months = full["month"].to_numpy()
     rows = []
@@ -195,6 +204,13 @@ def calendar_table(feat: pl.DataFrame) -> pl.DataFrame:
             }
         )
     return pl.DataFrame(rows).sort("month")
+
+
+def expected_brier(p: np.ndarray, q: np.ndarray) -> float:
+    """Expected binary Brier loss when q is the posterior event probability."""
+    p = np.asarray(p, dtype=float)
+    q = np.asarray(q, dtype=float)
+    return float(np.mean((p - q) ** 2 + q * (1 - q)))
 
 
 def main() -> None:
