@@ -1,10 +1,10 @@
-"""Monthly regime seasonality for XAUUSD D1 (FORMULA.md steps 1-13).
+"""Descriptive monthly regime features for XAUUSD D1 (FORMULA.md section 3).
 
 Pipeline:
   data/xauusd_d1.parquet (real bars only, is_filled=False)
     -> per calendar month features [T_range, T_direction, T_mono] + S_m
     -> 2-component GMM -> q_m = P(Trend | X_m)
-    -> group by month-of-year -> P(Trend | Jan..Dec) with shrinkage + CI
+    -> group by month-of-year -> descriptive P(Trend | Jan..Dec) + CI
 
 Outputs:
   data/monthly_features.parquet  (one row per year-month, with q_trend)
@@ -31,6 +31,7 @@ TAB_OUT = Path("data/seasonality_by_month.csv")
 FIG_SEASON = Path("seasonality.png")
 FIG_TIME = Path("monthly_scores.png")
 MIN_N_FIT = 15
+BOUND_TOL = 1e-10
 
 MONTH_NAMES = [
     "Jan",
@@ -48,8 +49,15 @@ MONTH_NAMES = [
 ]
 
 
+def clip_unit(value: float, label: str) -> float:
+    """Clip floating-point noise, but reject material invariant violations."""
+    if not np.isfinite(value) or value < -BOUND_TOL or value > 1 + BOUND_TOL:
+        raise ValueError(f"{label} outside [0,1]: {value}")
+    return float(np.clip(value, 0, 1))
+
+
 def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
-    """FORMULA steps 1-8. Returns (T_range, T_direction, T_mono, S_m)."""
+    """FORMULA section 3. Returns (T_range, T_direction, T_mono, S_m)."""
     n = len(c)
     if n <= 1:
         return 0.0, 0.0, 0.0, 0.0
@@ -59,12 +67,12 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
     if rm <= 0 or tr.sum() <= 0:
         return (float("nan"),) * 4
     t_range = 1.0 - float(np.log(tr.sum() / rm) / np.log(n))
-    t_range = float(np.clip(t_range, 0, 1))
+    t_range = clip_unit(t_range, "T_range")
 
     r = np.log(c / c_prev)
     denom = n * float(np.sum(r * r))
     t_dir = float(abs(r.sum()) / np.sqrt(denom)) if denom > 0 else 0.0
-    t_dir = float(np.clip(t_dir, 0, 1))
+    t_dir = clip_unit(t_dir, "T_direction")
 
     p = np.concatenate([[np.log(c0)], np.log(c)])
     try:
@@ -72,7 +80,7 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
     except ValueError:
         tau = np.nan
     t_mono = float(abs(tau)) if tau is not None and np.isfinite(tau) else 0.0
-    t_mono = float(np.clip(t_mono, 0, 1))
+    t_mono = clip_unit(t_mono, "T_mono")
 
     s = geomean_row(np.array([t_range, t_dir, t_mono]))
     return t_range, t_dir, t_mono, s
@@ -81,6 +89,31 @@ def month_features(h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float):
 def geomean_row(t: np.ndarray) -> float:
     t = np.clip(t, 0, 1)
     return 0.0 if t.min() <= 0 else float(np.prod(t) ** (1 / 3))
+
+
+def forecast_origin_features(
+    h: np.ndarray, low: np.ndarray, c: np.ndarray, c0: float
+) -> tuple[float, float, float, float]:
+    """Price-only state features known after a month's final D1 bar."""
+    if len(c) == 0 or c0 <= 0 or np.any(h <= 0) or np.any(low <= 0) or np.any(c <= 0):
+        return (float("nan"),) * 4
+    c_prev = np.concatenate([[c0], c[:-1]])
+    r = np.log(c / c_prev)
+    squared = r * r
+    rv = float(squared.sum())
+    range_var = float(np.square(np.log(h / low)).sum() / (4 * np.log(2)))
+    if rv <= 0:
+        return rv, range_var, 0.0, 0.0
+    jump_share = float(squared.max() / rv)
+    upside = float(squared[r >= 0].sum())
+    downside = float(squared[r < 0].sum())
+    semivar_imbalance = float(abs(upside - downside) / rv)
+    return (
+        rv,
+        range_var,
+        clip_unit(jump_share, "jump_share"),
+        clip_unit(semivar_imbalance, "semivar_imbalance"),
+    )
 
 
 def month_rows(real: pl.DataFrame) -> list[dict]:
@@ -127,6 +160,9 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
         low = mb["low"].to_numpy()
         c = mb["close"].to_numpy()
         tr, td, tm, s = month_features(h, low, c, float(c0))
+        rv, range_var, jump_share, semivar_imbalance = forecast_origin_features(
+            h, low, c, float(c0)
+        )
         rows.append(
             {
                 "year": y,
@@ -143,6 +179,10 @@ def build_monthly(real: pl.DataFrame) -> pl.DataFrame:
                 "t_direction": td,
                 "t_mono": tm,
                 "s": s,
+                "realized_variance": rv,
+                "range_variance": range_var,
+                "jump_share": jump_share,
+                "semivar_imbalance": semivar_imbalance,
             }
         )
     return pl.DataFrame(rows).sort(["year", "month"])
@@ -261,7 +301,7 @@ def main() -> None:
     ax.set_xticks(xs)
     ax.set_xticklabels(tab["month_name"].to_list())
     ax.set_ylabel("P(Trend)")
-    ax.set_title("XAUUSD monthly regime seasonality: P(Trend | calendar month)")
+    ax.set_title("XAUUSD historical regime seasonality: P(Trend | calendar month)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(FIG_SEASON, dpi=150)
@@ -285,7 +325,7 @@ def main() -> None:
         [feat["ym"][i] for i in range(0, feat.height, step)], rotation=30, ha="right"
     )
     ax2.set_ylabel("0=ranging 1=trend")
-    ax2.set_title("Monthly trend probability through time")
+    ax2.set_title("Descriptive monthly latent trend probability through time")
     ax2.legend()
     fig2.tight_layout()
     fig2.savefig(FIG_TIME, dpi=150)

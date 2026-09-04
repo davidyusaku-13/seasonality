@@ -10,12 +10,15 @@ Read [`README.md`](README.md) for what the project is and
   Everything else is offline from parquet. Windows-only (MetaTrader5).
 - Headless plots: `$env:MPLBACKEND="Agg"` before `uv run`, else
   `plt.show()` warns/blocks. Interactive use keeps default backend.
-- Numbered scripts run in dependency order 1→2→4/5→6/7/9 (3 validates,
+- Numbered scripts run in dependency order 1→2→4/5/6/7/8/9 (3 validates,
   `tmp.py` is throwaway scratch — currently the 2025 single-year chart).
-  There is no `8-*.py` (deleted XGB nowcast experiment; see git log).
+  `8-forecast-check.py` replaced the deleted XGB nowcast experiment.
 - Verify by execution: after touching logic, rerun the affected script
   plus `3-validate.py` / `7-formula-check.py` and quote their PASS lines.
   Never claim numbers you didn't just run.
+- Forecast changes also require `8-forecast-check.py`; changes to selection or
+  replay require rerunning `6-backtest.py` and `9-replay.py` so committed CSVs
+  and charts agree with the code.
 
 ## Rigor rules (earned the hard way here)
 
@@ -26,6 +29,9 @@ Read [`README.md`](README.md) for what the project is and
 - No lookahead: any claim about prediction skill must come from
   train-strictly-before-test schemes (`6-backtest.py`, `9-replay.py`),
   realized labels from the pre-window model, never the full-data one.
+- The official forecast is frozen after the last D1 bar of month m for month
+  m+1. A challenger replaces calendar only when calendar is excluded from the
+  95% year-block Model Confidence Set and regime diagnostics pass.
 - Report uncertainty with every probability (CI/n). A point estimate
   without its interval is a bug in this repo.
 - Determinism: fixed seeds everywhere (`random_state=0`, seeded synth).
@@ -41,6 +47,9 @@ Read [`README.md`](README.md) for what the project is and
 - Shared math lives in `2-seasonality.py` (`month_features`,
   `geomean_row`, `month_rows`) — import it via importlib (filenames start
   with digits), don't duplicate it.
+- Shared forecasting, bootstrap intervals, candidate fitting, and Model
+  Confidence Set selection live in `forecasting.py`; keep scripts 5/6/8/9 as
+  thin consumers of that module.
 - Matplotlib house style: no grid (`rcParams["axes.grid"] = False`),
   gray dashed month separators incl. first/last bar, tight x-limits
   (`set_xlim(first, last)`), UTC dates.

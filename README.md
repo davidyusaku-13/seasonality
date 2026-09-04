@@ -1,83 +1,115 @@
-# XAUUSD Monthly Regime Seasonality
+# XAUUSD Next-Month Regime Forecast
 
-Do gold months trend or chop? This repo answers that one question — **not**
-which direction price goes, but *how* it moves: persistent trend vs
-sideways chop, per calendar month, direction-agnostic.
+This project estimates whether the **next XAUUSD calendar month** will trend
+persistently or trade sideways/choppily. It is direction-agnostic: Trend can be
+bullish or bearish. It does not issue a trading signal.
 
-Spec: [`FORMULA.md`](FORMULA.md). Live view: [`charts/now.png`](charts/now.png).
+Formula and statistical contract: [`FORMULA.md`](FORMULA.md). Live view:
+[`charts/now.png`](charts/now.png).
 
-## Results (current)
+## Current forecast
 
-`P(Trend)` by calendar month, 19–20 Januaries/Februaries/… of history:
+After the final D1 bar of August 2026, the frozen forecast for September 2026
+is:
 
-| Month | P(Trend) | P(Sideways) | 95% CI |
-|---|---:|---:|---|
-| Jan | 62% | 38% | [41%, 83%] |
-| Feb | 68% | 32% | [48%, 87%] |
-| Mar | 32% | 68% | [13%, 51%] |
-| Apr | 26% | 74% | [8%, 43%] |
-| May | 40% | 60% | [20%, 60%] |
-| Jun | 65% | 35% | [45%, 84%] |
-| Jul | 51% | 49% | [33%, 70%] |
-| Aug | 53% | 47% | [31%, 74%] |
-| Sep | 62% | 38% | [42%, 82%] |
-| Oct | 42% | 58% | [22%, 63%] |
-| Nov | 44% | 56% | [25%, 64%] |
-| Dec | 61% | 39% | [41%, 81%] |
+| Target | P(Trend) | P(Sideways) | 95% bootstrap interval | Model | Training transitions |
+|---|---:|---:|---:|---|---:|
+| 2026-09 | 61.2% | 38.8% | [39.1%, 80.4%] | calendar fallback | 181 |
 
-Honest reading: real in-sample spreads (Feb 68% vs Apr 26%), but n≈19–20
-makes every CI ±20pp, and walk-forward skill vs climatology is only +0.005
-(expected Brier) over 2012–2026 — a lean, not a signal. High-confidence `q` calls
-are overconfident (predicted 0.69 → realized 0.42). See
-[`data/seasonality_by_month.csv`](data/seasonality_by_month.csv).
+No challenger currently earns promotion. Across 145 strictly out-of-sample
+monthly forecasts, partially pooled month effects give the best Brier point
+estimate, but calendar remains inside the 95% Model Confidence Set:
 
-## Method (one paragraph)
+| Model | Brier | Log loss | Brier difference vs calendar, 95% CI |
+|---|---:|---:|---:|
+| Calendar | 0.2569 | 0.7163 | 0.0000 [0.0000, 0.0000] |
+| Calibrated calendar | 0.2501 | 0.6940 | -0.0067 [-0.0247, +0.0111] |
+| Seasonal soft Markov | 0.2501 | 0.6933 | -0.0068 [-0.0271, +0.0131] |
+| Regularized logistic | 0.2494 | 0.6921 | -0.0074 [-0.0286, +0.0139] |
+| Cyclic seasonality | 0.2489 | 0.6937 | -0.0080 [-0.0269, +0.0106] |
+| Partially pooled months | **0.2484** | 0.6951 | -0.0085 [-0.0239, +0.0066] |
+| Multiscale price state | 0.2534 | 0.6999 | -0.0035 [-0.0297, +0.0235] |
 
-D1 bars → per calendar month three scores in [0, 1]: **range efficiency**
-(did the month expand its range without wandering), **directional
-coherence** (did daily moves agree *and* spread across days — a lone jump
-scores `1/sqrt(N)`), **temporal monotonicity** (`|Kendall tau|` of log
-close vs time — catches trend-then-reversal). Geometric mean → `S_m`.
-A 2-component GMM on `[T_range, T_direction, T_mono]` gives
-`q_m = P(Trend | month)`; calendar means with Jeffreys-style shrinkage
-(`(0.5 + Σq) / (N+1)`) give the table above.
+Pooling does reduce September's sampling interval: the partially pooled model
+estimates 53.6% `[44.8%, 61.1%]`, a 16.2-point interval versus calendar's
+41.3-point interval. This is a more precise but less decisive estimate near
+50%, and the evidence is not strong enough to replace the official baseline.
+The multiscale price features did not improve the pooled models.
+
+Intervals become narrower by sharing information across adjacent calendar
+months and shrinking sparse month effects toward the global rate. They cannot
+be honestly narrowed just by changing the confidence level or ignoring target
+and model-selection uncertainty; more independent history or genuinely useful
+predictors are still needed for greater certainty.
+
+The correct interpretation is therefore “calendar lean, not validated
+transition signal.” The realized outcome is itself a prior-only GMM latent
+state, not independently observed ground truth.
+
+## Method
+
+Completed D1 months receive three price-behavior scores in `[0,1]`: range
+efficiency, directional coherence, and temporal monotonicity. A two-component
+GMM fitted strictly on earlier months assigns a soft realized trend state
+`q_t`. Candidate models then forecast `q_(t+1)` from pooled calendar seasonality,
+recent states, and multiscale D1 volatility/jump measurements. Monthly
+expanding-window evaluation and a year-block Model Confidence Set decide
+whether any challenger may replace the calendar baseline.
+
+Only complete months with at least 15 real bars enter fitting or averages.
+Filled holiday placeholders are never observations. Every probability is
+reported with uncertainty and sample size.
 
 ## Pipeline
 
-Run in order with `uv run <script>` (Windows + MT5 terminal required
-only for step 1):
+Run with `uv run <script>` in dependency order. Only data download requires a
+running, logged-in MetaTrader 5 terminal.
 
-| # | Script | Does | Output |
-|---|---|---|---|
-| 1 | `1-download.py` | Full XAUUSD D1 via MT5; flat-fills 46 missing weekdays (45 NYSE holidays + 2022-12-01 gap) | `data/xauusd_d1.parquet` (5119 rows, 2007-06-22…2026-09-03) |
-| 2 | `2-seasonality.py` | Monthly features, GMM → `q`, calendar table | `data/monthly_features.parquet` (232 mo), `data/seasonality_by_month.csv`, `seasonality.png`, `monthly_scores.png` |
-| 3 | `3-validate.py` | 10 synthetic cases, 11 checks | console: must print `VALIDATION: PASS` |
-| 4 | `4-charts.py` | Yearly price + seasonality drawings | `charts/yearly/xauusd_YYYY.png` (20) |
-| 5 | `5-now.py` | Trailing 12 scored months + live-month projection | `charts/now.png` |
-| 6 | `6-backtest.py` | Walk-forward 2012–2026 skill vs climatology | console numbers |
-| 7 | `7-formula-check.py` | Formula invariants, edges, null distribution | console: must print `FORMULA-CHECK: PASS` |
-| 9 | `9-replay.py` | Blind 2026 replay through latest complete month | `data/replay_2026.csv` |
+| # | Script | Purpose |
+|---|---|---|
+| 1 | `1-download.py` | Download and validate XAUUSD D1 bars |
+| 2 | `2-seasonality.py` | Build monthly features and descriptive full-history regimes |
+| 3 | `3-validate.py` | Validate economic behavior on synthetic paths |
+| 4 | `4-charts.py` | Draw descriptive yearly price/regime charts |
+| 5 | `5-now.py` | Select the eligible model and publish the next-month forecast |
+| 6 | `6-backtest.py` | Run monthly expanding-window comparison and promotion test |
+| 7 | `7-formula-check.py` | Check formula invariants and real-data diagnostics |
+| 8 | `8-forecast-check.py` | Check causality, determinism, transitions, and forecast output |
+| 9 | `9-replay.py` | Reconstruct 2026 forecasts and model selection as known then |
 
-No `8-*.py` — it was the removed XGB nowcast (see history). `tmp.py`
-is scratch (currently: 2025 single-year mirror of script 4).
+Primary machine-readable outputs:
 
-## Validation status
+- `data/next_month_forecast.csv`
+- `data/next_month_candidates.csv`
+- `data/forecast_backtest.csv`
+- `data/model_comparison.csv`
+- `data/replay_2026.csv`
 
-- Formula: 12/12 PASS (`7-formula-check.py`) — exact hand values, scale
-  ×100 and time-reversal invariance to 1e-9, noise monotonicity, no NaN
-  over 230 full months, `corr(S,N) = −0.09`, GBM null mean `S = 0.34`.
-- Regimes: 11/11 PASS (`3-validate.py`), incl. single-shock
-  `T_dir == 1/sqrt(N)` and bull/bear symmetry.
-- Replay Jan–Aug 2026, zero lookahead: expected Brier 0.223 vs 0.249
-  (skill +0.106), hard calls 6/8, refit stability PASS (max drift 0.004).
-- Live (as of 2026-09-03): Sep 2026 in progress (N=3, unscored);
-  projection Sep = 62% [42%, 82%].
+To reproduce the forecast and its checks after the parquet data is available:
 
-## Data notes
+```powershell
+$env:MPLBACKEND="Agg"
+uv run 2-seasonality.py
+uv run 6-backtest.py
+uv run 5-now.py
+uv run 9-replay.py
+uv run 3-validate.py
+uv run 7-formula-check.py
+uv run 8-forecast-check.py
+uvx ruff check .
+uvx ruff format --check .
+```
 
-- Single consistent D1 feed (Vantage Markets live). Broker Sunday bars
-  kept as-is; features use real bars only (`is_filled=False`).
-- Only completed months with N>=15 enter the GMM fit and calendar means.
-  The live month may be scored for diagnostics but remains excluded.
-- All dates UTC. Deterministic: fixed seeds; reruns reproduce every
-  number above.
+## Current validation
+
+- Formula and synthetic regime checks pass.
+- Prior-only targets are deterministic; altering a future month cannot alter
+  earlier targets.
+- All 145 evaluation folds have ordered component means and favor two GMM
+  components by BIC.
+- Synthetic checks verify cyclic/month pooling, multiscale causality, and Model
+  Confidence Set inclusion and exclusion behavior.
+- Blind 2026 replay: 8 forecasts, Brier 0.2101, hard agreement 6/8. Calendar
+  remained the official model at every historical origin.
+
+All dates are UTC and all stochastic procedures use fixed seeds.

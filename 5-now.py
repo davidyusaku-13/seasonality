@@ -1,12 +1,4 @@
-"""As-of-today regime view: trailing scored months + live-month projection.
-
-Reads data/monthly_features.parquet + data/seasonality_by_month.csv (no MT5;
-rerun 1-download.py and then 2-seasonality.py to refresh). Calendar completion
-and the N>=15 validity gate are separate. The projection for the live month is
-the calendar-table row (shrunk P(Trend) + 95% CI), with no within-month data.
-
-Output: charts/now.png
-"""
+"""Frozen month-end forecast for the next XAUUSD monthly regime."""
 
 from pathlib import Path
 
@@ -14,78 +6,141 @@ import matplotlib
 import matplotlib.pyplot as plt
 import polars as pl
 
-matplotlib.rcParams["axes.grid"] = False
+import forecasting as fc
 
-FEAT = Path("data/monthly_features.parquet")
-TAB = Path("data/seasonality_by_month.csv")
 OUT = Path("charts/now.png")
-MIN_N = 15
+FORECAST_OUT = Path("data/next_month_forecast.csv")
+CANDIDATES_OUT = Path("data/next_month_candidates.csv")
 TRAIL = 12
 
 
 def main() -> None:
-    feat = pl.read_parquet(FEAT).sort(["year", "month"])
-    tab = pl.read_csv(TAB).sort("month")
-
-    rows = feat.filter(pl.col("is_complete") & (pl.col("n") >= MIN_N)).to_dicts()
-    if not rows:
-        raise SystemExit("no complete months in features")
-    latest = feat.to_dicts()[-1]
-    if latest["is_complete"]:
-        py, pm = (
-            (latest["year"], latest["month"] + 1)
-            if latest["month"] < 12
-            else (latest["year"] + 1, 1)
+    matplotlib.rcParams["axes.grid"] = False
+    feat = pl.read_parquet(fc.FEAT_PATH).sort(["year", "month"])
+    prequential = fc.build_prequential_targets(feat)
+    backtest, comparison, champion, regime_ok = fc.run_backtest(prequential)
+    rows, context, latest = fc.live_context(prequential)
+    predictions, tuning = fc.predict_candidates(rows, context)
+    comparison_by_model = {r["model"]: r for r in comparison}
+    calendar_in_mcs = comparison_by_model["calendar"]["mcs_included"]
+    candidate_rows = []
+    for model in fc.CANDIDATES:
+        candidate_p = predictions[model]
+        candidate_lo, candidate_hi = fc.live_interval(rows, context, model, tuning)
+        candidate_lo = min(candidate_lo, candidate_p)
+        candidate_hi = max(candidate_hi, candidate_p)
+        metrics = comparison_by_model[model]
+        candidate_rows.append(
+            {
+                "forecast_origin": latest["ym"],
+                "target_month": f"{context.target_year}-{context.target_month:02d}",
+                "model": model,
+                "p_trend": candidate_p,
+                "ci95_lo": candidate_lo,
+                "ci95_hi": candidate_hi,
+                "interval_width": candidate_hi - candidate_lo,
+                "oos_brier": metrics["brier"],
+                "oos_log_loss": metrics["log_loss"],
+                "calibration_ece_3bin": metrics["calibration_ece_3bin"],
+                "mcs_included": metrics["mcs_included"],
+                "promotion_eligible": bool(
+                    regime_ok
+                    and not calendar_in_mcs
+                    and metrics["mcs_included"]
+                    and model in fc.PROMOTABLE
+                ),
+                "selected": model == champion,
+                "train_n": len(rows),
+            }
         )
-    else:
-        py, pm = latest["year"], latest["month"]
-    proj = tab.filter(pl.col("month") == pm).to_dicts()[0]
-    trail = rows[-TRAIL:]
-    asof = feat["end"].max()
+    p = predictions[champion]
+    selected_candidate = next(r for r in candidate_rows if r["selected"])
+    lo, hi = selected_candidate["ci95_lo"], selected_candidate["ci95_hi"]
 
-    print(f"as of {asof} (data end)")
-    print(f"{'month':<8} {'S_m':>6} {'q':>6}")
-    for r in trail:
-        print(f"{r['ym']:<8} {r['s']:>6.3f} {r['q_trend']:>6.3f}")
+    target = f"{context.target_year}-{context.target_month:02d}"
+    origin = latest["ym"]
+    status = "validated" if champion != "calendar" else "baseline_fallback"
+    result = {
+        "forecast_origin": origin,
+        "origin_end": latest["end"],
+        "target_month": target,
+        "p_trend": p,
+        "p_sideways": 1 - p,
+        "ci95_lo": lo,
+        "ci95_hi": hi,
+        "model": champion,
+        "baseline_p": predictions["calendar"],
+        "train_n": len(rows),
+        "target_definition": "prior-only GMM latent trend state",
+        "diagnostic_status": status if regime_ok else "regime_diagnostics_failed",
+    }
+    FORECAST_OUT.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame([result]).write_csv(FORECAST_OUT)
+    pl.DataFrame(candidate_rows).write_csv(CANDIDATES_OUT)
+
+    print(f"forecast origin: {origin} final D1 bar {latest['end']}")
+    print(f"target month: {target}")
     print(
-        f"projection {py}-{pm:02d} ({proj['month_name']}): "
-        f"P(Trend)={proj['p_trend']:.1%} "
-        f"95% CI [{proj['ci95_lo']:.1%},{proj['ci95_hi']:.1%}] "
-        f"(n={proj['n']})"
+        f"P(Trend)={p:.1%} P(Sideways)={1 - p:.1%} "
+        f"95% bootstrap interval=[{lo:.1%},{hi:.1%}]"
     )
+    print(
+        f"model={champion} calendar_baseline={predictions['calendar']:.1%} "
+        f"status={result['diagnostic_status']} train_n={len(rows)}"
+    )
+    print(f"walk-forward forecasts used for selection: {len(backtest)}")
 
-    xs = list(range(len(trail) + 1))
-    labels = [r["ym"] for r in trail] + [f"{py}-{pm:02d}*"]
-    qs = [r["q_trend"] for r in trail]
-
+    scored = [r for r in prequential if r["q_prequential"] is not None][-TRAIL:]
+    xs = list(range(len(scored) + 1))
+    labels = [r["ym"] for r in scored] + [f"{target}*"]
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(xs[:-1], qs, marker="o", linewidth=2, label="q_m actual")
+    ax.plot(
+        xs[:-1],
+        [r["q_prequential"] for r in scored],
+        marker="o",
+        linewidth=2,
+        label="realized prior-only q",
+    )
     ax.errorbar(
         [xs[-1]],
-        [proj["p_trend"]],
-        yerr=[
-            [proj["p_trend"] - proj["ci95_lo"]],
-            [proj["ci95_hi"] - proj["p_trend"]],
-        ],
+        [p],
+        yerr=[[p - lo], [hi - p]],
         fmt="s",
         color="green",
         ecolor="black",
         capsize=5,
-        label="projection",
+        label=f"next-month forecast ({champion})",
     )
-    ax.axvline(xs[-1] - 0.5, color="gray", linestyle="--", linewidth=0.8)
+    if champion != "calendar":
+        ax.scatter(
+            [xs[-1]],
+            [predictions["calendar"]],
+            marker="x",
+            color="gray",
+            label="calendar baseline",
+        )
+    for boundary in [x - 0.5 for x in xs] + [xs[-1] + 0.5]:
+        ax.axvline(boundary, color="gray", linestyle="--", linewidth=0.8, alpha=0.35)
     ax.set_ylim(0, 1)
+    ax.set_xlim(xs[0] - 0.5, xs[-1] + 0.5)
     ax.set_xticks(xs)
     ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.set_ylabel("0=ranging 1=trend")
+    ax.set_ylabel("0=sideways/choppy, 1=trend")
     ax.set_title(
-        f"XAUUSD regime now (as of {asof}): trailing {len(trail)}m + {proj['month_name']} projection"
+        f"XAUUSD next-month regime forecast: {target} (origin {origin}, {champion})"
     )
     ax.legend()
     fig.tight_layout()
     OUT.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(OUT, dpi=150)
-    print(f"saved={OUT.resolve()}")
+    plt.close(fig)
+    print(f"wrote {FORECAST_OUT}, {CANDIDATES_OUT}, and {OUT}")
+
+    selected = next(r for r in comparison if r["model"] == champion)
+    print(
+        f"selected walk-forward Brier={selected['brier']:.4f} "
+        f"logloss={selected['log_loss']:.4f}"
+    )
 
 
 if __name__ == "__main__":

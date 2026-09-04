@@ -1,1426 +1,251 @@
-# Forex Monthly Regime Seasonality Formula
+# XAUUSD Next-Month Regime Forecast
 
-## Objective
+## 1. Objective and forecast origin
 
-The goal is to estimate, for each calendar month, the historical probability that the market is:
+The system predicts whether the **next complete calendar month** will exhibit a
+persistent trend or sideways/choppy price behavior. It does not predict bullish
+or bearish direction and it does not issue a trading signal.
 
-- **Trending**, or
-- **Sideways / choppy**
-
-This is **not** directional seasonality.
-
-We are not asking questions such as:
-
-> Does XAUUSD usually go up in January?
-
-Instead, the question is:
-
-> How often does XAUUSD behave like a persistent trend during January, regardless of whether the trend is bullish or bearish?
-
-The final output should look conceptually like:
-
-| Month    | P(Trend) | P(Sideways) |
-| -------- | -------: | ----------: |
-| January  |      68% |         32% |
-| February |      44% |         56% |
-| March    |      72% |         28% |
-| ...      |      ... |         ... |
-
-The classification should be derived entirely from **price behavior**, not from strategy performance.
-
----
-
-# 1. Timeframe
-
-Use:
+After the final XAUUSD D1 bar of month $m$, freeze one forecast for month
+$m+1$:
 
 \[
-\boxed{\text{D1}}
+p_{m+1}=P(Z_{m+1}=\text{Trend}\mid\mathcal F_m),
+\qquad
+P(Z_{m+1}=\text{Sideways})=1-p_{m+1}.
 \]
 
-Each calendar month therefore contains approximately 20–23 observations.
+There are two distinct stages:
 
-D1 is preferred because the research question concerns the regime of the **entire month**, not intraday market structure.
+1. measure the realized, model-defined regime of a completed month;
+2. predict the following month's realized regime using only information
+   available at the forecast origin.
 
-Using lower timeframes such as M15 would heavily overweight intraday noise and session structure.
+## 2. Data policy
 
----
+- Use raw XAUUSD D1 OHLC from one consistent feed.
+- Use real bars only (`is_filled=False`). Filled holiday placeholders are not
+  observations.
+- A month is valid for regime fitting and calendar estimates only when it is
+  complete and contains at least 15 real bars.
+- Use UTC dates. The first available prior close may fall back to the first
+  bar's Open; that partial first month remains outside all fitted samples.
+- Heikin-Ashi and other smoothed prices are excluded.
 
-# 2. Price Representation
+## 3. Realized monthly regime features
 
-## 2.1 Line chart
+For a valid month with $N$ daily bars, let $C_0$ be the final real Close
+before the month and let $H_t,L_t,C_t$ denote its daily prices.
 
-A conventional line chart normally plots one price per bar.
-
-The default is usually:
+### Range efficiency
 
 \[
-\boxed{\text{Close}}
+TR_t=\max(H_t,C_{t-1})-\min(L_t,C_{t-1}),
 \]
 
-Therefore, the daily Close sequence is a natural representation of the month's directional trajectory.
-
-## 2.2 Japanese candlesticks
-
-Japanese candlesticks contain:
-
 \[
-O_t,\ H_t,\ L_t,\ C_t
+R_m=\max(C_0,H_1,\ldots,H_N)-\min(C_0,L_1,\ldots,L_N),
 \]
 
-They preserve information that a line chart cannot show, especially:
-
-- intraday excursions,
-- overlapping ranges,
-- large wicks,
-- price travel that eventually returns near the Close.
-
-This information is useful for determining whether a month is genuinely clean or highly choppy.
-
-## 2.3 Heikin-Ashi
-
-Heikin-Ashi should **not** be used for this research.
-
-Heikin-Ashi transforms and smooths raw OHLC data.
-
-That is useful visually, but inappropriate for a regime classifier because smoothing makes trends appear cleaner than the original market actually was.
-
-The classifier should measure the raw market rather than first transforming it into something trend-like.
-
----
-
-# 3. Which OHLC Fields Are Needed?
-
-Use raw D1 OHLC data as the source dataset.
-
-However, the core formula does not require every OHLC field equally.
-
-The important values are:
-
 \[
-\boxed{H*t,\ L_t,\ C_t,\ C*{t-1}}
+T_{\mathrm{range}}
+=1-\frac{\ln\left(\sum_{t=1}^{N}TR_t/R_m\right)}{\ln N}.
 \]
 
-Open is not currently required as a separate feature.
+High values indicate that cumulative travel efficiently expanded the monthly
+envelope. Before clipping, validate $R_m>0$, $\sum TR_t>0$, and allow only
+floating-point-sized bound violations. Material violations are data or formula
+errors.
 
-The reason is that the important information is already captured by:
+### Directional coherence
 
-1. the daily Close path, and
-2. the High/Low excursion relative to the previous Close.
-
-Therefore:
-
-- **Close** measures directional trajectory.
-- **High / Low** measure intraday price travel.
-- **Previous Close** allows gaps and cross-day movement to be included.
-- **Open** does not currently contribute a sufficiently unique regime property.
-
-This does **not** mean Open is useless in general trading research. It means it is unnecessary for this specific monthly trend-vs-sideways definition.
-
----
-
-# 4. Design Principle
-
-A trending month should satisfy three different conditions:
-
-1. Price should not wander excessively relative to the total range it achieves.
-2. Daily returns should be coherently directional and distributed across the month.
-3. The sequence of daily closes should remain temporally monotonic.
-
-These produce three independent measurements:
+With close-to-close log returns
 
 \[
-\boxed{
-T*{\text{range}},
-\quad
-T*{\text{direction}},
-\quad
-T\_{\text{mono}}
-}
+r_t=\ln(C_t/C_{t-1}),
 \]
 
-Each is normalized approximately to:
+define
 
 \[
-[0,1]
+T_{\mathrm{direction}}
+=\frac{\left|\sum_{t=1}^{N}r_t\right|}
+{\sqrt{N\sum_{t=1}^{N}r_t^2}}.
 \]
 
-where higher values mean more trend-like behavior.
-
----
-
-# 5. Component 1 — Range Efficiency
-
-## Purpose
-
-This component answers:
-
-> How much total price travel was required to create the month's final trading range?
-
-A clean trend should expand its overall range efficiently.
-
-A sideways or choppy month repeatedly traverses the same region, generating large cumulative movement without proportionally expanding the month's total range.
-
-## 5.1 True Range
-
-For every D1 bar:
+This combines directional agreement and movement participation:
 
 \[
-TR*t
-=
-\max(H_t,C*{t-1})
-
-- \min(L*t,C*{t-1})
-  \]
-
-This is equivalent to the standard True Range definition.
-
-It captures:
-
-- normal intraday range,
-- upside gaps,
-- downside gaps.
-
-## 5.2 Monthly Price Envelope
-
-Let \(C_0\) be the final Close immediately before the calendar month begins.
-
-Define:
-
-\[
-R_m
-=
-\max(C_0,H_1,H_2,\ldots,H_N)
-
-- \min(C_0,L_1,L_2,\ldots,L_N)
-  \]
-
-This is the full price span reached during the month, including the initial starting price.
-
-## 5.3 Range Efficiency Formula
-
-Define:
-
-\[
-\boxed{
-T*{\text{range}}
-=
-1-
-\frac{
-\ln
-\left(
-\frac{\sum*{t=1}^{N}TR_t}{R_m}
-\right)
-}{
-\ln(N)
-}
-}
-\]
-
-Then clip numerically to:
-
-\[
-\boxed{0 \le T\_{\text{range}} \le 1}
-\]
-
-This is closely related to an inverted normalized Choppiness-style measure.
-
-Interpretation:
-
-\[
-T\_{\text{range}}\rightarrow1
-\]
-
-means price expanded efficiently.
-
-\[
-T\_{\text{range}}\rightarrow0
-\]
-
-means cumulative movement was large relative to the range ultimately achieved.
-
-## Example
-
-Suppose two months both travel from roughly 2500 to 2700.
-
-### Month A
-
-Total True Range:
-
-\[
-\sum TR=300
-\]
-
-Monthly envelope:
-
-\[
-R_m=220
-\]
-
-Then cumulative travel is only moderately larger than the total range.
-
-This is relatively efficient.
-
-### Month B
-
-Total True Range:
-
-\[
-\sum TR=1000
-\]
-
-Monthly envelope:
-
-\[
-R_m=220
-\]
-
-Price has travelled through the same region repeatedly.
-
-This is much more characteristic of choppy behavior.
-
----
-
-# 6. Component 2 — Directional Coherence
-
-## Purpose
-
-This component answers:
-
-> Were the month's daily movements consistently contributing to one directional move?
-
-It should also penalize months where almost the entire directional movement occurs on only one or two exceptional days.
-
-## 6.1 Daily Log Returns
-
-Use Close-to-Close logarithmic returns:
-
-\[
-\boxed{
-r*t
-=
-\ln
-\left(
-\frac{C_t}{C*{t-1}}
-\right)
-}
-\]
-
-Log returns are preferred because they are additive across time:
-
-\[
-\sum\_{t=1}^{N}r_t
-=
-\ln
-\left(
-\frac{C_N}{C_0}
-\right)
-\]
-
-## 6.2 Directional Coherence Formula
-
-Define:
-
-\[
-\boxed{
-T*{\text{direction}}
-=
-\frac{
-\left|
-\sum*{t=1}^{N}r*t
-\right|
-}{
-\sqrt{
-N
-\sum*{t=1}^{N}r_t^2
-}
-}
-}
-\]
-
-This is bounded by:
-
-\[
-\boxed{0\le T\_{\text{direction}}\le1}
-\]
-
-because of the Cauchy-Schwarz inequality.
-
-## Interpretation
-
-### Perfectly consistent trend
-
-If every daily return is identical and has the same sign:
-
-\[
-r_1=r_2=\cdots=r_N
-\]
-
-then:
-
-\[
-T\_{\text{direction}}=1
-\]
-
-### Sideways / alternating movement
-
-If returns repeatedly cancel each other:
-
-\[
-+1\%,-1\%,+1\%,-1\%,\ldots
-\]
-
-then:
-
-\[
-\sum r_t\approx0
-\]
-
-and therefore:
-
-\[
-T\_{\text{direction}}\approx0
-\]
-
-## Important Property — Single Giant Jump
-
-Suppose the month contains 20 trading days and only one day has a meaningful move.
-
-For example:
-
-```text
-0
-0
-0
-0
-+10%
-0
-0
-...
-```
-
-Then:
-
-\[
-T\_{\text{direction}}
-=
-\frac{1}{\sqrt{20}}
-\approx0.224
-\]
-
-Importantly, the result remains:
-
-\[
-\frac{1}{\sqrt{20}}
-\]
-
-whether that isolated move is +5%, +10%, or +50%.
-
-Therefore a single huge jump cannot make the month appear like a perfect persistent trend.
-
-This fixes an important weakness of Kaufman's Efficiency Ratio.
-
-## 6.3 Useful Decomposition
-
-The same quantity can be written as:
-
-\[
-T*{\text{direction}}
-=
-\underbrace{
-\frac{
-|\sum r_t|
-}{
-\sum |r_t|
-}
-}*{\text{Directional consistency}}
+T_{\mathrm{direction}}
+=\frac{|\sum r_t|}{\sum|r_t|}
 \times
-\underbrace{
-\frac{
-\sum |r*t|
-}{
-\sqrt{N\sum r_t^2}
-}
-}*{\text{Movement participation}}
+\frac{\sum|r_t|}{\sqrt{N\sum r_t^2}}.
 \]
 
-The first term measures how strongly movements agree in direction.
+A single nonzero return scores $1/\sqrt N$, regardless of its magnitude.
 
-The second term measures whether movement is distributed across many days instead of concentrated into a few exceptional observations.
-
-This is one reason the formula is useful for monthly regime detection.
-
----
-
-# 7. Component 3 — Temporal Monotonicity
-
-## Purpose
-
-Directional coherence does not know the order in which returns occurred.
-
-For example, the following two months can contain similar return distributions:
-
-### Persistent staircase
-
-```text
-100
-102
-101
-103
-102
-104
-103
-105
-```
-
-### Trend then reversal
-
-```text
-100
-102
-104
-106
-108
-106
-104
-102
-```
-
-The second month should not be considered as strongly trending because its regime reverses halfway through the month.
-
-An order-sensitive statistic is therefore needed.
-
-## 7.1 Log Price Sequence
-
-Define:
+### Temporal monotonicity
 
 \[
-p_t=\ln(C_t)
+T_{\mathrm{mono}}
+=\left|\tau_b([0,1,\ldots,N],[C_0,C_1,\ldots,C_N])\right|.
 \]
 
-Use:
+Kendall tau is rank-based, so using log prices would give the same result.
+This feature penalizes trend-then-reversal paths that return distributions alone
+cannot distinguish.
+
+The three features are complementary, not statistically independent:
 
 \[
-p_0,p_1,\ldots,p_N
+X_m=[T_{\mathrm{range}},T_{\mathrm{direction}},T_{\mathrm{mono}}].
 \]
 
-where \(p_0\) is the log of the previous month's final Close.
-
-## 7.2 Kendall Tau
-
-Calculate Kendall's rank correlation between time and log price:
+For diagnostics only, use
 
 \[
-\tau_b
-=
-\tau_b
-\left(
-[0,1,\ldots,N],
-[p_0,p_1,\ldots,p_N]
-\right)
+S_m=(T_{\mathrm{range}}T_{\mathrm{direction}}T_{\mathrm{mono}})^{1/3}.
 \]
 
-Then ignore direction by taking the absolute value:
+For $N\le1$, return zeros. A completely flat month is invalid. Valid
+normalized values are clipped to $[0,1]$ only after invariant checks.
+
+### Forecast-origin price state
+
+From the same real D1 returns, retain price-only information known at the end
+of the origin month:
 
 \[
-\boxed{
-T\_{\text{mono}}
-=
-|\tau_b|
-}
-\]
-
-Therefore:
-
-\[
-\boxed{0\le T\_{\text{mono}}\le1}
-\]
-
-## Interpretation
-
-A persistent bullish trend:
-
-\[
-\tau_b\rightarrow+1
-\]
-
-A persistent bearish trend:
-
-\[
-\tau_b\rightarrow-1
-\]
-
-Because bullish and bearish trends are both trends:
-
-\[
-T\_{\text{mono}}
-=
-|\tau_b|
-\rightarrow1
-\]
-
-Sideways or repeatedly reversing movement tends toward lower values.
-
----
-
-# 8. Optional Single Monthly Trend Score
-
-The three measurements should remain separately available.
-
-However, for visualization or descriptive analysis, they can be summarized into one score.
-
-Use the geometric mean:
-
-\[
-\boxed{
-S*m
-=
-\sqrt[3]{
-T*{\text{range}}
-T*{\text{direction}}
-T*{\text{mono}}
-}
-}
-\]
-
-or equivalently:
-
-\[
-\boxed{
-S*m
-=
-\left(
-T*{\text{range}}
-T*{\text{direction}}
-T*{\text{mono}}
-\right)^{1/3}
-}
-\]
-
-where:
-
-\[
-0\le S_m\le1
-\]
-
-## Why Geometric Mean?
-
-The arithmetic mean would allow one strong property to compensate excessively for one weak property.
-
-Example:
-
-\[
-T\_{\text{range}}=0.90
+RV_m=\sum_t r_t^2,
+\qquad
+PK_m=\frac{1}{4\ln2}\sum_t\ln^2(H_t/L_t),
 \]
 
 \[
-T\_{\text{direction}}=0.90
+J_m=\frac{\max_t r_t^2}{RV_m},
+\qquad
+A_m=\frac{|\sum_{r_t\ge0}r_t^2-\sum_{r_t<0}r_t^2|}{RV_m}.
 \]
 
+The multiscale predictors use log $RV$ over the last 1, 3, and 12 complete
+months, log current-month $PK$, current $J_m$ and $A_m$, $q_m$, and
+$q_m-q_{m-1}$. Rolling windows must contain consecutive valid months and must
+end at the forecast origin.
+
+## 4. Prior-only realized state
+
+The operational outcome is a **model-defined latent regime**, not independently
+observed ground truth. For each valid month $t$:
+
+1. require at least 48 earlier valid months;
+2. fit a two-component full-covariance Gaussian mixture to $X_{1:t-1}$, with
+   `n_init=10`, `reg_covar=1e-3`, and `random_state=0`;
+3. identify Trend as the component with the larger mean across the three
+   equally scaled features;
+4. record
+   \[
+   q_t=P(Z_t=\text{Trend}\mid X_t, X_{1:t-1}).
+   \]
+
+No later month may revise $q_t$. Report whether the Trend component dominates
+the other component in every feature and whether two components beat one by
+BIC. Crossed component means or fewer than 80% BIC-supporting evaluation folds
+fail the regime-stability gate.
+
+The full-history GMM and calendar table remain useful descriptive views, but
+they must never supply outcomes for a forecasting-skill claim.
+
+## 5. Forecast candidates
+
+Each outer evaluation origin uses expanding history and predicts exactly one
+month ahead. Training pairs must be consecutive valid calendar months.
+Evaluation begins after at least 36 prior transition examples.
+
+Compare:
+
+1. a Jeffreys-smoothed global prior;
+2. a Jeffreys-smoothed target-calendar-month prior;
+3. a prior-only fractional-logistic calibration of the calendar prior;
+4. persistence, $p_{t+1}=q_t$;
+5. a globally shrunk two-state soft Markov transition;
+6. target-month soft Markov transitions shrunk toward the global transition;
+7. an L2-regularized fractional-logistic model using the calendar prior,
+   $q_t$, and $q_t-q_{t-1}$;
+8. first- and second-harmonic cyclic seasonality;
+9. twelve centered calendar-month effects with L2 partial pooling;
+10. the multiscale price state without seasonality;
+11. cyclic seasonality plus the multiscale price state;
+12. partially pooled month effects plus the multiscale price state.
+
+For soft Markov transitions, expected counts use the fractional state weights.
+For example,
+
 \[
-T\_{\text{mono}}=0.10
+\hat a_1
+=\frac{0.5+\sum_t q_tq_{t+1}}{1+\sum_t q_t},
+\qquad
+\hat a_0
+=\frac{0.5+\sum_t(1-q_t)q_{t+1}}{1+\sum_t(1-q_t)},
 \]
 
-Arithmetic mean:
+and
 
 \[
-\frac{0.90+0.90+0.10}{3}
-=
-0.633
+p_{t+1}=(1-q_t)\hat a_0+q_t\hat a_1.
 \]
 
-This is too generous.
+Choose seasonal shrinkage from \(\{2,6,12,24\}\) and logistic L2 penalty from
+\(\{0.01,0.1,1,10,100\}\) using inner expanding-window Brier loss only.
 
-Geometric mean:
+## 6. Evaluation and model promotion
+
+Use monthly expanding-window evaluation. Random cross-validation is forbidden.
+The primary score for forecast $p_t$ and soft outcome $q_t$ is expected
+binary Brier loss:
 
 \[
-(0.90\times0.90\times0.10)^{1/3}
-\approx0.433
+L_B=(p_t-q_t)^2+q_t(1-q_t).
 \]
 
-The weak monotonicity meaningfully reduces the final score.
-
-That is desirable because a strong trend should satisfy **all three conditions**, not merely one or two.
-
----
-
-# 9. Do Not Use the Single Score as the Main Classifier
-
-Although \(S_m\) is convenient, compressing three features into one inevitably discards information.
-
-The preferred regime representation is therefore:
-
-\[
-\boxed{
-X*m
-=
-[
-T*{\text{range}},
-T*{\text{direction}},
-T*{\text{mono}}
-]
-}
-\]
-
-Use \(S_m\) mainly for:
-
-- visualization,
-- ranking,
-- diagnostic plots,
-- human-readable summaries.
-
-Use the three-dimensional feature vector for the actual statistical regime model.
-
----
-
-# 10. Regime Classification
-
-Do **not** define an arbitrary threshold such as:
-
-```text
-score >= 0.50 -> Trend
-score < 0.50  -> Sideways
-```
-
-A threshold such as 0.50 would simply become another manually chosen or optimized parameter.
-
-Instead, let the historical distribution identify the regimes.
-
-## 10.1 Two-Regime Mixture
-
-Collect all historical months:
-
-\[
-X_1,X_2,\ldots,X_M
-\]
-
-where:
-
-\[
-X*m
-=
-[
-T*{\text{range}},
-T*{\text{direction}},
-T*{\text{mono}}
-]
-\]
-
-Fit a two-component probabilistic mixture model.
-
-Conceptually:
-
-\[
-p(X)
-=
-\pi_T f_T(X)
-
-- \pi_S f_S(X)
-  \]
-
-where:
-
-- \(f_T\) is the trend-regime component,
-- \(f_S\) is the sideways-regime component,
-- \(\pi_T\) and \(\pi_S\) are their prior probabilities.
-
-The component with larger values across the trend dimensions becomes the **Trend** component.
-
-The other becomes **Sideways / Choppy**.
-
-## 10.2 Soft Classification
-
-For every historical month, calculate:
-
-\[
-\boxed{
-q_m
-=
-P(\text{Trend}\mid X_m)
-}
-\]
-
-Then:
-
-\[
-P(\text{Sideways}\mid X_m)
-=
-1-q_m
-\]
-
-Example:
-
-```text
-2018-04
-
-T_range       = 0.79
-T_direction   = 0.83
-T_mono        = 0.88
-
-Trend Score   = 0.83
-P(Trend)      = 0.94
-P(Sideways)   = 0.06
-```
-
-Another month:
-
-```text
-2019-04
-
-T_range       = 0.31
-T_direction   = 0.18
-T_mono        = 0.29
-
-Trend Score   = 0.25
-P(Trend)      = 0.07
-P(Sideways)   = 0.93
-```
-
-An ambiguous month can legitimately produce:
-
-```text
-P(Trend) = 0.51
-```
-
-instead of being forced into a hard binary label.
-
----
-
-# 11. Calendar-Month Seasonality
-
-Once every historical month has a trend probability, group observations by month-of-year.
-
-For January:
-
-\[
-q*{\text{Jan},1},
-q*{\text{Jan},2},
-\ldots,
-q\_{\text{Jan},Y}
-\]
-
-where \(Y\) is the number of years in the historical sample.
-
-The simplest soft estimate is:
-
-\[
-\boxed{
-P(\text{Trend}\mid\text{January})
-=
-\frac{1}{Y}
-\sum*{y=1}^{Y}
-q*{\text{Jan},y}
-}
-\]
-
-Likewise for every other month.
-
-Then:
-
-\[
-\boxed{
-P(\text{Sideways}\mid m)
-=
-1-P(\text{Trend}\mid m)
-}
-\]
-
----
-
-# 12. Bayesian Shrinkage / Small-Sample Adjustment
-
-Calendar-month seasonality has an unavoidable sample-size problem.
-
-Even 20 years of history gives only:
-
-```text
-20 Januaries
-20 Februaries
-20 Marches
-...
-```
-
-Therefore raw probabilities should not be interpreted as exact frequencies.
-
-## 12.1 Hard Binary Labels
-
-If hard labels are ever used, with:
-
-- \(k_m\) trending observations,
-- \(N_m\) total observations,
-
-a simple Jeffreys-prior estimate is:
-
-\[
-\boxed{
-P_m
-=
-\frac{
-k_m+0.5
-}{
-N_m+1
-}
-}
-\]
-
-## 12.2 Soft Probabilities
-
-If the regime model provides:
-
-\[
-q\_{m,y}
-=
-P(\text{Trend})
-\]
-
-for each observation, an analogous smoothed estimator is:
-
-\[
-\boxed{
-P*m
-=
-\frac{
-0.5+\sum_y q*{m,y}
-}{
-N_m+1
-}
-}
-\]
-
-A more complete implementation should also calculate uncertainty intervals rather than reporting only one probability.
-
----
-
-# 13. Final Desired Output
-
-The final research result should eventually look approximately like:
-
-| Month     | P(Trend) | P(Sideways) | Sample | Uncertainty |
-| --------- | -------: | ----------: | -----: | ----------: |
-| January   |      68% |         32% |     20 |         ... |
-| February  |      44% |         56% |     20 |         ... |
-| March     |      72% |         28% |     20 |         ... |
-| April     |      38% |         62% |     20 |         ... |
-| May       |      51% |         49% |     20 |         ... |
-| June      |      ... |         ... |    ... |         ... |
-| July      |      ... |         ... |    ... |         ... |
-| August    |      ... |         ... |    ... |         ... |
-| September |      ... |         ... |    ... |         ... |
-| October   |      ... |         ... |    ... |         ... |
-| November  |      ... |         ... |    ... |         ... |
-| December  |      ... |         ... |    ... |         ... |
-
-This represents:
-
-\[
-P(\text{market regime} \mid \text{calendar month})
-\]
-
-not expected return.
-
----
-
-# 14. Why Several Alternatives Were Rejected
-
-## 14.1 Kaufman Efficiency Ratio
-
-Standard efficiency ratio:
-
-\[
-ER
-=
-\frac{
-|C*N-C_0|
-}{
-\sum*{t=1}^{N}|C*t-C*{t-1}|
-}
-\]
-
-The major failure case is a month with one giant jump and otherwise flat prices.
-
-Example:
-
-```text
-0
-0
-0
-+10%
-0
-0
-...
-```
-
-The numerator and denominator can become approximately identical:
-
-\[
-ER\approx1
-\]
-
-which classifies the month as a perfect trend.
-
-That is undesirable.
-
-The proposed directional coherence measure instead gives:
-
-\[
-T\_{\text{direction}}
-=
-\frac{1}{\sqrt N}
-\]
-
-for a single isolated move.
-
-## 14.2 ADX
-
-ADX should not define the regime because:
-
-- it introduces a lookback parameter,
-- it introduces threshold choices,
-- the result becomes "seasonality of ADX" rather than a fundamental characterization of price behavior.
-
-ADX may still be used later as an external comparison.
-
-## 14.3 Hurst Exponent
-
-Hurst estimation is unattractive here because a calendar month contains only approximately 20–23 daily observations.
-
-That is an extremely small sample for reliable Hurst estimation.
-
-Therefore it adds substantial estimation noise without solving a unique problem that the other measurements do not already address.
-
-## 14.4 Linear Regression \(R^2\)
-
-Regression fit can be useful diagnostically, but it can behave poorly when:
-
-- a structural jump occurs,
-- the month consists of multiple regimes,
-- price trends and later reverses.
-
-It is therefore not necessary in the core formula.
-
-## 14.5 Moving Averages
-
-Moving-average slope or ordering introduces arbitrary lookback lengths.
-
-Examples:
-
-- SMA10,
-- EMA20,
-- SMA5 vs SMA20.
-
-These create unnecessary parameters and partly smooth away the behavior we are attempting to measure.
-
-## 14.6 Heikin-Ashi
-
-Heikin-Ashi deliberately smooths OHLC data.
-
-Because the objective is to determine whether the **raw market itself** was smooth/trending or choppy, the classifier should not receive a price transformation specifically designed to visually emphasize trends.
-
-## 14.7 Candle Body / Wick Features
-
-Candidate features such as:
-
-\[
-\frac{|C-O|}{H-L}
-\]
-
-bullish-candle percentage,
-
-wick ratios,
-
-close location within range,
-
-and average candle body were considered.
-
-They are currently excluded because much of their regime information is already captured by:
-
-- cumulative True Range,
-- monthly envelope,
-- Close-to-Close returns,
-- return concentration,
-- temporal ordering.
-
-Adding many candle-morphology features would make the definition increasingly arbitrary and could encourage overfitting.
-
-They may later be tested as secondary explanatory variables, but should not be part of the initial regime definition.
-
----
-
-# 15. Avoid Strategy Information in the Formula
-
-Do not include:
-
-- strategy Profit Factor,
-- strategy Sharpe,
-- strategy return,
-- win rate,
-- breakout success rate,
-- trade count,
-- EA drawdown,
-- EA expectancy.
-
-The regime classifier must be independent of the strategy.
-
-Otherwise the analysis becomes circular:
-
-```text
-good strategy month
-    ->
-classified as trend
-    ->
-strategy performs well in trend
-```
-
-Instead:
-
-```text
-raw market prices
-    ->
-regime classification
-    ->
-calendar regime seasonality
-    ->
-strategy tested conditionally afterward
-```
-
-This separation is important.
-
----
-
-# 16. Data Consistency
-
-## D1 Candle Session
-
-Daily OHLC values depend on the data vendor's daily-session boundary.
-
-Different brokers may construct different D1 candles from the same underlying intraday market.
-
-Therefore the entire history should use one consistent D1 definition.
-
-Preferably:
-
-\[
-\boxed{\text{New York-close style D1 data}}
-\]
-
-if reliable data is available.
-
-The exact convention matters less at a monthly horizon than it would on M15, but mixing candle-session definitions across the dataset should still be avoided.
-
----
-
-# 17. Edge Cases
-
-## 17.1 Missing Trading Days
-
-Use the actual number of available trading bars:
-
-\[
-N=\text{number of D1 observations in the month}
-\]
-
-Do not force every month to contain the same number of bars.
-
-## 17.2 Zero Monthly Range
-
-If:
-
-\[
-R_m=0
-\]
-
-the range-efficiency formula is undefined.
-
-This should be treated as an invalid / degenerate observation rather than assigned an arbitrary trend score.
-
-For liquid XAUUSD or major FX data this should practically never occur.
-
-## 17.3 Zero Return Energy
-
-If:
-
-\[
-\sum r_t^2=0
-\]
-
-then the entire month was mathematically unchanged.
-
-Set:
-
-\[
-T\_{\text{direction}}=0
-\]
-
-because there was no trend.
-
-## 17.4 Numerical Clipping
-
-Floating-point arithmetic may occasionally produce values marginally outside the intended range.
-
-Therefore use:
-
-\[
-T_i
-\leftarrow
-\min(1,\max(0,T_i))
-\]
-
-for normalized components.
-
----
-
-# 18. Complete Formula Summary
-
-For each calendar month containing \(N\) D1 bars:
-
-## Step 1 — True Range
-
-\[
-TR*t
-=
-\max(H_t,C*{t-1})
-
-- \min(L*t,C*{t-1})
-  \]
-
-## Step 2 — Monthly Envelope
-
-\[
-R_m
-=
-\max(C_0,H_1,\ldots,H_N)
-
-- \min(C_0,L_1,\ldots,L_N)
-  \]
-
-## Step 3 — Range Efficiency
-
-\[
-\boxed{
-T\_{\text{range}}
-=
-1-
-\frac{
-\ln
-\left(
-\frac{\sum TR_t}{R_m}
-\right)
-}{
-\ln(N)
-}
-}
-\]
-
-## Step 4 — Log Returns
-
-\[
-r*t
-=
-\ln
-\left(
-\frac{C_t}{C*{t-1}}
-\right)
-\]
-
-## Step 5 — Directional Coherence
-
-\[
-\boxed{
-T\_{\text{direction}}
-=
-\frac{
-|\sum r_t|
-}{
-\sqrt{
-N\sum r_t^2
-}
-}
-}
-\]
-
-## Step 6 — Log Prices
-
-\[
-p_t=\ln(C_t)
-\]
-
-## Step 7 — Temporal Monotonicity
-
-\[
-\boxed{
-T\_{\text{mono}}
-=
-|\tau_b(t,p_t)|
-}
-\]
-
-## Step 8 — Descriptive Trend Score
-
-\[
-\boxed{
-S*m
-=
-\left(
-T*{\text{range}}
-T*{\text{direction}}
-T*{\text{mono}}
-\right)^{1/3}
-}
-\]
-
-## Step 9 — Regime Feature Vector
-
-\[
-\boxed{
-X*m
-=
-[
-T*{\text{range}},
-T*{\text{direction}},
-T*{\text{mono}}
-]
-}
-\]
-
-## Step 10 — Probabilistic Classification
-
-Fit a two-component regime model:
-
-\[
-\boxed{
-q_m
-=
-P(\text{Trend}\mid X_m)
-}
-\]
-
-## Step 11 — Calendar-Month Seasonality
-
-For calendar month \(j\):
-
-\[
-\boxed{
-P(\text{Trend}\mid j)
-=
-\frac{1}{N*j}
-\sum_y q*{j,y}
-}
-\]
-
-with statistical shrinkage / uncertainty reporting.
-
-Finally:
-
-\[
-\boxed{
-P(\text{Sideways}\mid j)
-=
-1-P(\text{Trend}\mid j)
-}
-\]
-
----
-
-# 19. Recommended Research Pipeline
-
-```text
-Raw D1 OHLC
-    |
-    v
-Create calendar-month groups
-    |
-    +--> High / Low / Previous Close
-    |       |
-    |       v
-    |   T_range
-    |
-    +--> Daily Close
-            |
-            +--> Log returns
-            |       |
-            |       v
-            |   T_direction
-            |
-            +--> Ordered log-price path
-                    |
-                    v
-                T_mono
-
-[T_range, T_direction, T_mono]
-            |
-            +--> Geometric mean -> S_m
-            |                       |
-            |                       v
-            |                  diagnostics only
-            |
-            v
-Two-regime probabilistic model
-            |
-            v
-P(Trend | each historical month)
-            |
-            v
-Group by January ... December
-            |
-            v
-Seasonality probability
-            |
-            v
-P(Trend | January)
-P(Trend | February)
-...
-P(Trend | December)
-```
-
----
-
-# 20. Current Recommended Definition
-
-The current preferred definition of a trending month is:
-
-> A month whose overall price range expands efficiently, whose daily Close-to-Close movements are coherently directional and distributed across the month, and whose daily closing path remains persistently monotonic through time.
-
-The corresponding feature vector is:
-
-\[
-\boxed{
-[
-T_{\text{range}},
-T_{\text{direction}},
-T_{\text{mono}}
-]
-}
-\]
-
-This is preferable to a single technical indicator because each component captures a different failure mode:
-
-| Component                 | Main problem detected                                |
-| ------------------------- | ---------------------------------------------------- |
-| \(T\_{\text{range}}\)     | intraday wandering / repeated range traversal        |
-| \(T\_{\text{direction}}\) | cancellation and movement concentrated in a few days |
-| \(T\_{\text{mono}}\)      | trend reversal or poor temporal persistence          |
-
-Together they provide a compact, parameter-light definition of monthly market regime.
-
----
-
-# 21. Status
-
-This document describes the **current research specification**, not a permanently fixed formula.
-
-The next correct step is empirical validation.
-
-Before accepting the model as final, it should be tested against synthetic and historical examples representing at least:
-
-1. perfectly smooth bullish trend,
-2. perfectly smooth bearish trend,
-3. quiet sideways market,
-4. volatile sideways market,
-5. one-day price shock,
-6. trend followed by reversal,
-7. staircase trend,
-8. trend with large intraday wicks,
-9. random walk,
-10. mixed / ambiguous month.
-
-The formula should only be considered validated if its rankings across these controlled cases agree with the intended economic meaning of **trend versus sideways**.
+Also report fractional log loss, hard agreement at 0.5, reliability bins, and
+calibration diagnostics. Compare each candidate with the calendar baseline via
+a paired year-cluster bootstrap with a fixed seed.
+
+A 95% block-bootstrap Model Confidence Set sequentially removes demonstrably
+inferior models using their common-fold Brier losses. A candidate becomes the
+official model only when:
+
+- the regime-stability gate passes; and
+- calendar is excluded from the final Model Confidence Set.
+
+Among surviving candidates, select the lowest Brier loss and prefer the simpler
+model in a tie. If calendar remains in the confidence set, the official output
+is the calendar baseline and must say `baseline_fallback`. A sophisticated
+model is not promoted merely because its point estimate is best.
+
+## 7. Live output and uncertainty
+
+The live artifact contains:
+
+- forecast origin and its final D1 date;
+- target calendar month;
+- official model and calendar baseline;
+- $P(\text{Trend})$ and its exact complementary
+  $P(\text{Sideways})$;
+- a deterministic 95% year-cluster bootstrap interval;
+- training sample size, target definition, and diagnostic status.
+
+The candidate artifact additionally reports every model's forecast, interval
+width, walk-forward scores, confidence-set membership, and eligibility.
+
+The interval represents sampling/model uncertainty conditional on the chosen
+latent-regime definition. It is not an interval for trading returns.
+
+## 8. Required validation
+
+The implementation must preserve scale and time-reversal invariance, bull/bear
+symmetry, the single-shock penalty, random-walk behavior, and the `N>=15` gate.
+It must additionally prove that future observations cannot alter earlier
+labels or forecasts, every transition is between consecutive months, all
+probabilities are finite and bounded, outputs are deterministic, and model
+selection falls back safely when no challenger credibly beats calendar.

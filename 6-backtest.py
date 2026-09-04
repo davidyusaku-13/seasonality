@@ -1,90 +1,65 @@
-"""Walk-forward verification of the calendar-month projection (no lookahead).
+"""Monthly expanding-window evaluation of next-month regime forecasts."""
 
-For each test year Y in 2012..2026: fit the 2-component GMM and the calendar
-means on months strictly before Jan Y (N>=15), predict P(Trend) for each
-month of Y, and score against the realized posterior from that same
-pre-Y model. Compares soft Brier score vs a climatology baseline (train
-mean) plus hard accuracy and calibration bins.
-
-Exit 0 always; this measures skill, it does not gate.
-"""
-
-import importlib.util
 from pathlib import Path
 
-import numpy as np
 import polars as pl
-from sklearn.mixture import GaussianMixture
 
-FEAT = Path("data/monthly_features.parquet")
-MIN_N = 15
-FIRST_TEST_YEAR = 2012
-FEATS = ["t_range", "t_direction", "t_mono"]
-SPEC = Path(__file__).with_name("2-seasonality.py")
-_spec = importlib.util.spec_from_file_location("seasonality2", SPEC)
-s2 = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(s2)
+import forecasting as fc
 
-
-def fit_gmm(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    gmm = GaussianMixture(
-        n_components=2,
-        covariance_type="full",
-        n_init=10,
-        random_state=0,
-        reg_covar=1e-3,
-    )
-    gmm.fit(X)
-    trend_idx = int(np.argsort(gmm.means_.mean(axis=1))[1])
-    return gmm, gmm.predict_proba(X)[:, trend_idx]
+PRED_OUT = Path("data/forecast_backtest.csv")
+MODEL_OUT = Path("data/model_comparison.csv")
 
 
 def main() -> None:
-    feat = pl.read_parquet(FEAT).sort(["year", "month"])
-    years = sorted(set(feat["year"].to_list()))
-    recs = []
-    for y in [t for t in years if t >= FIRST_TEST_YEAR]:
-        train = feat.filter(
-            (pl.col("year") < y) & pl.col("is_complete") & (pl.col("n") >= MIN_N)
-        )
-        if train.height < 24:
-            continue
-        Xtr = train.select(FEATS).to_numpy()
-        gmm, qtr = fit_gmm(Xtr)
-        cal = {}
-        for m in range(1, 13):
-            qq = qtr[train["month"].to_numpy() == m]
-            cal[m] = float((0.5 + qq.sum()) / (len(qq) + 1)) if len(qq) else 0.5
-        clima = float(qtr.mean())
-        test = feat.filter(
-            (pl.col("year") == y) & pl.col("is_complete") & (pl.col("n") >= MIN_N)
-        )
-        Xte = test.select(FEATS).to_numpy()
-        trend_idx = int(np.argsort(gmm.means_.mean(axis=1))[1])
-        qre = gmm.predict_proba(Xte)[:, trend_idx]
-        for row, qr in zip(test.to_dicts(), qre):
-            recs.append((y, row["month"], cal[row["month"]], float(qr), clima))
+    feat = pl.read_parquet(fc.FEAT_PATH).sort(["year", "month"])
+    prequential = fc.build_prequential_targets(feat)
+    predictions, comparison, champion, regime_ok = fc.run_backtest(prequential)
+    if not predictions:
+        raise SystemExit("insufficient history for forecast backtest")
 
-    p = np.array([r[2] for r in recs])
-    r_ = np.array([r[3] for r in recs])
-    c = np.array([r[4] for r in recs])
-    brier, brier_clima = s2.expected_brier(p, r_), s2.expected_brier(c, r_)
-    acc = float(np.mean((p > 0.5) == (r_ > 0.5)))
-    acc_clima = float(np.mean((c > 0.5) == (r_ > 0.5)))
-    print(f"predictions: {len(recs)} month-years")
-    print(
-        f"Brier calendar={brier:.4f} climatology={brier_clima:.4f} "
-        f"skill={1 - brier / brier_clima:+.3f}"
+    PRED_OUT.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(predictions).write_csv(PRED_OUT)
+    table = pl.DataFrame(comparison).with_columns(
+        (pl.col("model") == champion).alias("selected"),
+        pl.lit(regime_ok).alias("regime_diagnostics_pass"),
     )
-    print(f"hard accuracy calendar={acc:.3f} climatology={acc_clima:.3f}")
-    print("calibration (bin: n, mean_pred, mean_realized):")
-    for lo, hi in ((0.0, 0.33), (0.33, 0.66), (0.66, 1.01)):
-        m = (p >= lo) & (p < hi)
-        if m.sum():
-            print(
-                f"  [{lo:.2f},{hi:.2f}): n={int(m.sum())} "
-                f"pred={p[m].mean():.3f} realized={r_[m].mean():.3f}"
-            )
+    table.write_csv(MODEL_OUT)
+
+    crossed = sum(r["component_crossed"] for r in predictions)
+    bic = sum(r["bic_advantage_2"] > 0 for r in predictions)
+    print(f"predictions: {len(predictions)} monthly forecast origins")
+    print(
+        f"regime diagnostics: crossed={crossed}/{len(predictions)} "
+        f"BIC2_support={bic}/{len(predictions)} "
+        f"status={'PASS' if regime_ok else 'FAIL'}"
+    )
+    print(
+        f"{'model':<24} {'Brier':>8} {'logloss':>8} {'agree':>8} {'MCS':>5} "
+        f"{'dBrier vs cal [95% CI]':>30}"
+    )
+    for row in comparison:
+        marker = " *" if row["model"] == champion else ""
+        print(
+            f"{row['model']:<24} {row['brier']:>8.4f} "
+            f"{row['log_loss']:>8.4f} {row['hard_agreement']:>8.3f} "
+            f"{row['mcs_included']!s:>5} "
+            f"{row['brier_diff_vs_calendar']:>+8.4f} "
+            f"[{row['brier_diff_ci95_lo']:+.4f},{row['brier_diff_ci95_hi']:+.4f}]"
+            f"{marker}"
+        )
+    print("calibration (intercept, slope, 3-bin ECE):")
+    for row in comparison:
+        print(
+            f"  {row['model']:<16} {row['calibration_intercept']:+.3f} "
+            f"{row['calibration_slope']:.3f} {row['calibration_ece_3bin']:.3f}"
+        )
+    reason = (
+        "calendar excluded from the 95% model confidence set"
+        if champion != "calendar"
+        else "calendar remains in the 95% model confidence set"
+    )
+    print(f"CHAMPION: {champion} ({reason})")
+    print(f"wrote {PRED_OUT} and {MODEL_OUT}")
 
 
 if __name__ == "__main__":

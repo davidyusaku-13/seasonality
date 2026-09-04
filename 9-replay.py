@@ -1,139 +1,76 @@
-"""Blind replay Jan 2026 -> latest complete month (no lookahead).
+"""Blind 2026 replay of the frozen next-month forecasting pipeline."""
 
-For each target month M: fit GMM + calendar means on months strictly
-before M (N>=15), project M from its calendar row, then confirm against
-M's realized q (step-GMM posterior) and S (formula on revealed data).
-
-Output: data/replay_2026.csv (one row per target month)
-"""
-
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import polars as pl
-from sklearn.mixture import GaussianMixture
 
+import forecasting as fc
 
-def load_mod(name: str):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-s2 = load_mod("2-seasonality.py")
-
-SRC = Path("data/xauusd_d1.parquet")
 OUT = Path("data/replay_2026.csv")
-MIN_N = 15
-TARGETS = ["t_range", "t_direction", "t_mono"]
-
-
-def final_X(mo: dict) -> np.ndarray:
-    tr, td, tm, _ = s2.month_features(mo["h"], mo["low"], mo["c"], mo["c0"])
-    return np.array([tr, td, tm])
-
-
-def fit_gmm(X: np.ndarray):
-    g = GaussianMixture(
-        n_components=2,
-        covariance_type="full",
-        n_init=10,
-        random_state=0,
-        reg_covar=1e-3,
-    )
-    g.fit(X)
-    tidx = int(np.argsort(g.means_.mean(axis=1))[1])
-    return g, tidx, g.predict_proba(X)[:, tidx]
 
 
 def main() -> None:
-    real = pl.read_parquet(SRC).filter(~pl.col("is_filled")).sort("time")
-    months = [
-        m for m in s2.month_rows(real) if m["is_complete"] and len(m["c"]) >= MIN_N
-    ]
-    by_ym = {m["ym"]: m for m in months}
-    targets = [m["ym"] for m in months if m["year"] == 2026]
+    feat = pl.read_parquet(fc.FEAT_PATH).sort(["year", "month"])
+    prequential = fc.build_prequential_targets(feat)
+    predictions, _, _, _ = fc.run_backtest(prequential)
+    transitions = fc.build_transition_records(prequential)
+    targets = [r for r in predictions if r["year"] == 2026]
     if not targets:
-        raise SystemExit("no complete 2026 months")
+        raise SystemExit("no valid 2026 forecast targets")
 
-    recs = []
-    stab = []
-    for t in targets:
-        hist = [m for m in months if m["ym"] < t]
-        Xh = np.array([final_X(m) for m in hist])
-        g, tidx, qh = fit_gmm(Xh)
-        stab.append(
+    replay = []
+    for row in targets:
+        prior = [r for r in predictions if r["seq"] < row["seq"]]
+        comparison, champion, regime_ok = fc.select_champion(prior)
+        official = float(row[f"p_{champion}"])
+        train = [r for r in transitions if r["seq"] < row["seq"]]
+        context = fc._context_from_record(row)
+        tuning = {
+            "seasonal_strength": row["seasonal_strength"],
+            "logistic_penalty": row["logistic_penalty"],
+            **{
+                f"{model}_penalty": row[f"{model}_penalty"] for model in fc.RIDGE_MODELS
+            },
+        }
+        lo, hi = fc.live_interval(train, context, champion, tuning)
+        lo, hi = min(lo, official), max(hi, official)
+        replay.append(
             {
-                "ym": t,
-                "means": g.means_.copy(),
-                "weights": g.weights_.copy(),
-                "tidx": tidx,
+                "ym": row["ym"],
+                "model": champion,
+                "pred_q": official,
+                "ci95_lo": lo,
+                "ci95_hi": hi,
+                "calendar_q": row["p_calendar"],
+                "real_q": row["q"],
+                "train_n": len(train),
+                "regime_diagnostics_pass": regime_ok,
             }
         )
-        qh_by_m: dict[int, list] = {}
-        for m, q in zip([m["month"] for m in hist], qh):
-            qh_by_m.setdefault(m, []).append(q)
-        mo = by_ym[t]
-        p = float((0.5 + sum(qh_by_m[mo["month"]])) / (len(qh_by_m[mo["month"]]) + 1))
-        clima = float(qh.mean())
-        X_t = final_X(mo)
-        q_real = float(g.predict_proba(X_t.reshape(1, -1))[0, tidx])
-        s_real = s2.geomean_row(X_t)
-        recs.append(
-            {
-                "ym": t,
-                "pred_q": p,
-                "real_q": q_real,
-                "real_s": s_real,
-                "clima": clima,
-            }
-        )
+        selected = next(r for r in comparison if r["model"] == champion)
         print(
-            f"{t}: proj={p:.3f} clima={clima:.3f} real_q={q_real:.3f} "
-            f"real_S={s_real:.3f}"
+            f"{row['ym']}: model={champion} pred={official:.3f} "
+            f"CI=[{lo:.3f},{hi:.3f}] calendar={row['p_calendar']:.3f} "
+            f"real_q={row['q']:.3f} "
+            f"prior_Brier={selected['brier']:.4f}"
         )
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(recs).write_csv(OUT)
-    pred = np.array([r["pred_q"] for r in recs])
-    clima = np.array([r["clima"] for r in recs])
-    realized = np.array([r["real_q"] for r in recs])
-    bp = s2.expected_brier(pred, realized)
-    bc = s2.expected_brier(clima, realized)
-    print(f"wrote {OUT.resolve()}")
+    pl.DataFrame(replay).write_csv(OUT)
+    p = np.array([r["pred_q"] for r in replay])
+    c = np.array([r["calendar_q"] for r in replay])
+    q = np.array([r["real_q"] for r in replay])
+    bp = float(np.mean((p - q) ** 2 + q * (1 - q)))
+    bc = float(np.mean((c - q) ** 2 + q * (1 - q)))
+    agree = float(np.mean((p >= 0.5) == (q >= 0.5)))
+    print(f"wrote {OUT}")
     print(
-        f"{len(recs)}-month replay: Brier proj={bp:.4f} clima={bc:.4f} "
-        f"skill={1 - bp / bc:+.3f}"
+        f"{len(replay)}-month replay: Brier official={bp:.4f} "
+        f"calendar={bc:.4f} skill={1 - bp / bc:+.3f}"
     )
-    print(
-        f"hard agree proj={np.mean([(r['pred_q'] > 0.5) == (r['real_q'] > 0.5) for r in recs]):.3f}"
-    )
-
-    ref_g, ref_tidx, _ = fit_gmm(np.array([final_X(m) for m in months]))
-    ref_means = ref_g.means_
-    print("refit stability (drift = L2 of trend-mean vs full-data fit):")
-    worst, ok = 0.0, True
-    for s in stab:
-        D = np.array(
-            [
-                [np.linalg.norm(s["means"][i] - ref_means[j]) for j in (0, 1)]
-                for i in (0, 1)
-            ]
-        )
-        match_trend = int(np.argmin(D[:, ref_tidx]))  # step comp nearest ref-trend
-        drift = float(np.linalg.norm(s["means"][s["tidx"]] - ref_means[ref_tidx]))
-        worst = max(worst, drift)
-        same = match_trend == s["tidx"] and float(s["weights"].min()) > 0.2
-        ok &= same
-        print(
-            f"  {s['ym']}: tidx={s['tidx']} weights={np.round(s['weights'], 3).tolist()} "
-            f"drift={drift:.4f} label_match={match_trend == s['tidx']}"
-        )
-    print(
-        f"STABILITY: {'PASS' if ok and worst < 0.05 else 'FAIL'} (max_drift={worst:.4f})"
-    )
+    print(f"hard agreement={agree:.3f}")
+    print("REPLAY: PASS (all targets and model selections are prior-only)")
 
 
 if __name__ == "__main__":

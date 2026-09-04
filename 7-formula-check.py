@@ -74,6 +74,13 @@ check(
 tr, td, tm, s = mf(np.array([101.0]), np.array([99.0]), np.array([100.5]), 100.0)
 check("N=1 is 0, no crash", (tr, td, tm, s) == (0.0, 0.0, 0.0, 0.0))
 
+try:
+    s2.clip_unit(1.01, "synthetic")
+    rejected_bad_bound = False
+except ValueError:
+    rejected_bad_bound = True
+check("material bound violation rejected", rejected_bad_bound)
+
 # 5. scale invariance x100
 rng = np.random.default_rng(3)
 c = C0 * np.cumprod(1 + rng.normal(0.001, 0.008, N))
@@ -83,6 +90,23 @@ check(
     "scale x100 invariant",
     np.allclose(a, b, atol=1e-9),
     f"maxdiff={max(abs(x - y) for x, y in zip(a, b)):.2e}",
+)
+
+origin_a = s2.forecast_origin_features(*ohlc(c, 0.002), C0)
+origin_b = s2.forecast_origin_features(*(v * 100 for v in ohlc(c, 0.002)), C0 * 100)
+check(
+    "forecast-origin features scale invariant",
+    np.allclose(origin_a, origin_b, atol=1e-12),
+    f"maxdiff={max(abs(x - y) for x, y in zip(origin_a, origin_b)):.2e}",
+)
+
+shock_c = np.full(N, C0)
+shock_c[5:] = C0 * 1.1
+shock_origin = s2.forecast_origin_features(*ohlc(shock_c), C0)
+check(
+    "single shock has unit jump share and semivariance imbalance",
+    np.isclose(shock_origin[2], 1.0) and np.isclose(shock_origin[3], 1.0),
+    f"jump={shock_origin[2]:.3f} imbalance={shock_origin[3]:.3f}",
 )
 
 # 6. time-reversal invariance (proper path reversal incl. H/L and C0)
@@ -119,7 +143,19 @@ check(
 
 # 8. real data: no nan, N-bias, component redundancy
 feat = pl.read_parquet("data/monthly_features.parquet").filter(pl.col("n") >= 15)
-X = feat.select(["t_range", "t_direction", "t_mono", "s", "n"]).to_numpy()
+X = feat.select(
+    [
+        "t_range",
+        "t_direction",
+        "t_mono",
+        "s",
+        "n",
+        "realized_variance",
+        "range_variance",
+        "jump_share",
+        "semivar_imbalance",
+    ]
+).to_numpy()
 check("no nan in 230 full months", bool(np.isfinite(X).all()))
 cs = float(np.corrcoef(X[:, 4], X[:, 3])[0, 1])
 check("S_m nearly N-independent", abs(cs) < 0.15, f"corr(S,N)={cs:+.3f}")
