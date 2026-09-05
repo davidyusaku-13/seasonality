@@ -1,2 +1,0 @@
-forecast_origin,origin_end,target_month,p_trend,p_sideways,ci95_lo,ci95_hi,model,baseline_p,train_n,target_definition,diagnostic_status
-2026-08,2026-08-31,2026-09,0.6119620643746606,0.3880379356253394,0.3913885586560444,0.8041285848313582,calendar,0.6119620643746606,181,prior-only GMM latent trend state,baseline_fallback
