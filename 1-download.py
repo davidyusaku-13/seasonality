@@ -15,7 +15,6 @@ from pathlib import Path
 import MetaTrader5 as mt5
 import polars as pl
 
-
 DEFAULT_SYMBOL = "XAUUSD"
 DEFAULT_OUTPUT = Path("XAUUSD_D1.parquet")
 EARLIEST_DATE = datetime(1970, 1, 1, tzinfo=UTC)
@@ -63,8 +62,7 @@ def download_ohlc(symbol: str) -> pl.DataFrame:
         return (
             # MT5 timestamps are Unix timestamps (UTC). Keep them as timezone-naive
             # UTC datetimes for portable Parquet reads, including on Windows.
-            data.with_columns(pl.from_epoch("time", time_unit="s"))
-            .select(
+            data.with_columns(pl.from_epoch("time", time_unit="s")).select(
                 "time",
                 "open",
                 "high",

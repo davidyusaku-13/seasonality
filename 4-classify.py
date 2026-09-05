@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-
 DEFAULT_INPUT = Path("XAUUSD_D1_clean.parquet")
 DEFAULT_OUTPUT_DIR = Path("output/classifications/xauusd_d1")
 R_SQUARED_THRESHOLD = 0.35
@@ -25,7 +24,9 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Classify each month of XAUUSD D1 data as trending or ranging."
     )
-    parser.add_argument("--year", type=int, help="analyze only this year (default: all available years)")
+    parser.add_argument(
+        "--year", type=int, help="analyze only this year (default: all available years)"
+    )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="source Parquet file")
     parser.add_argument(
         "--output-dir",
@@ -75,7 +76,9 @@ def classify_month(data: pl.DataFrame) -> dict[str, float | str | int]:
     }
 
 
-def save_classification_plot(results: list[dict[str, float | str | int]], output_path: Path, year: int, dpi: int) -> None:
+def save_classification_plot(
+    results: list[dict[str, float | str | int]], output_path: Path, year: int, dpi: int
+) -> None:
     """Save R-squared and efficiency bars, colored by the monthly regime."""
     months = [calendar.month_abbr[int(result["month"])] for result in results]
     r_squared = [float(result["r_squared"]) for result in results]
@@ -95,10 +98,21 @@ def save_classification_plot(results: list[dict[str, float | str | int]], output
     )
     for axis, values, threshold, title in (
         (r_squared_axis, r_squared, R_SQUARED_THRESHOLD, "R-squared (linearity)"),
-        (efficiency_axis, efficiency, EFFICIENCY_RATIO_THRESHOLD, "Efficiency ratio (directional movement)"),
+        (
+            efficiency_axis,
+            efficiency,
+            EFFICIENCY_RATIO_THRESHOLD,
+            "Efficiency ratio (directional movement)",
+        ),
     ):
         axis.bar(positions, values, color=colors, width=0.72)
-        axis.axhline(threshold, color="#4b5563", linewidth=1, linestyle="--", label=f"Threshold {threshold:.2f}")
+        axis.axhline(
+            threshold,
+            color="#4b5563",
+            linewidth=1,
+            linestyle="--",
+            label=f"Threshold {threshold:.2f}",
+        )
         axis.set_ylim(0, 1)
         axis.set_ylabel(title)
         axis.grid(axis="y", color="#e5e7eb", linewidth=0.7)

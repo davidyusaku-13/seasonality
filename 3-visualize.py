@@ -9,16 +9,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import polars as pl
 
-
 DEFAULT_INPUT = Path("XAUUSD_D1_clean.parquet")
 DEFAULT_OUTPUT_DIR = Path("output/visualizations/xauusd_d1")
 REQUIRED_COLUMNS = {"time", "close"}
 
 
 def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Create one XAUUSD D1 close-price chart per year."
-    )
+    parser = argparse.ArgumentParser(description="Create one XAUUSD D1 close-price chart per year.")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="source Parquet file")
     parser.add_argument(
         "--output-dir",
@@ -42,7 +39,9 @@ def load_prices(input_path: Path) -> pl.DataFrame:
         data.select("time", "close")
         .drop_nulls()
         .sort("time")
-        .with_columns(pl.col("time").dt.year().alias("year"), pl.col("time").dt.month().alias("month"))
+        .with_columns(
+            pl.col("time").dt.year().alias("year"), pl.col("time").dt.month().alias("month")
+        )
     )
 
 

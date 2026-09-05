@@ -8,7 +8,6 @@ from pathlib import Path
 
 import polars as pl
 
-
 REQUIRED_COLUMNS = {
     "time",
     "open",
@@ -30,9 +29,7 @@ def parse_arguments() -> argparse.Namespace:
         description="Fill missing weekday D1 candles using the previous close."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="source Parquet file")
-    parser.add_argument(
-        "--output", type=Path, default=DEFAULT_OUTPUT, help="cleaned Parquet file"
-    )
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="cleaned Parquet file")
     return parser.parse_args()
 
 
@@ -48,9 +45,7 @@ def fill_missing_candles(data: pl.DataFrame) -> tuple[pl.DataFrame, int]:
     if data.select(pl.col("_date").is_duplicated().any()).item():
         raise ValueError("Input has more than one candle for at least one date.")
 
-    dates = pl.date_range(
-        data["_date"].min(), data["_date"].max(), interval="1d", eager=True
-    )
+    dates = pl.date_range(data["_date"].min(), data["_date"].max(), interval="1d", eager=True)
     dates = dates.filter(dates.dt.weekday() <= 5)
     calendar = pl.DataFrame({"_date": dates})
     merged = calendar.join(data, on="_date", how="left").sort("_date")
@@ -68,7 +63,10 @@ def fill_missing_candles(data: pl.DataFrame) -> tuple[pl.DataFrame, int]:
             previous_close.alias("_previous_close"),
         )
         .with_columns(
-            pl.when("_is_empty").then(pl.col("_previous_close")).otherwise(pl.col(column)).alias(column)
+            pl.when("_is_empty")
+            .then(pl.col("_previous_close"))
+            .otherwise(pl.col(column))
+            .alias(column)
             for column in OHLC_COLUMNS
         )
         .with_columns(
@@ -91,7 +89,9 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     cleaned.write_parquet(args.output, compression="zstd")
-    print(f"Saved {cleaned.height:,} candles to {args.output}; filled {filled_count:,} empty candles.")
+    print(
+        f"Saved {cleaned.height:,} candles to {args.output}; filled {filled_count:,} empty candles."
+    )
     return 0
 
 
